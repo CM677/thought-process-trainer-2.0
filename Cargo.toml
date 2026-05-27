@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 postflop-solver = { git = "https://github.com/b-inary/postflop-solver" }
+bincode = "1"
 csv = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
