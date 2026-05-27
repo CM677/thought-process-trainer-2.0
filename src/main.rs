@@ -14,6 +14,7 @@ struct SolveSize {
     tree_size: &'static str,
     csv_size: &'static str,
     suffix: &'static str,
+    pot_fraction: f32,
 }
 
 struct ActionValues {
@@ -21,8 +22,8 @@ struct ActionValues {
     check_ev: f32,
     bet_freq: f32,
     bet_ev: f32,
-    allin_freq: f32,
-    allin_ev: f32,
+    allin_freq: Option<f32>,
+    allin_ev: Option<f32>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -31,16 +32,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             tree_size: "33%",
             csv_size: "0.33",
             suffix: "33",
+            pot_fraction: 0.33,
         },
         SolveSize {
             tree_size: "75%",
             csv_size: "0.75",
             suffix: "75",
+            pot_fraction: 0.75,
         },
         SolveSize {
             tree_size: "125%",
             csv_size: "1.25",
             suffix: "125",
+            pot_fraction: 1.25,
         },
     ];
 
@@ -72,7 +76,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     ])?;
 
     for size in sizes {
-        let values = solve_one_size(size.tree_size)?;
+        let values = solve_one_size(&size)?;
         let (best_action, ev) = best_action(values.check_ev, values.bet_ev, values.allin_ev);
 
         writer.write_record([
@@ -88,8 +92,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             size.csv_size.to_string(),
             format_float(values.bet_freq),
             format_float(values.bet_ev),
-            format_float(values.allin_freq),
-            format_float(values.allin_ev),
+            format_optional_float(values.allin_freq),
+            format_optional_float(values.allin_ev),
             "null".to_string(),
             "null".to_string(),
             "null".to_string(),
@@ -107,7 +111,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn solve_one_size(ip_bet_size: &str) -> Result<ActionValues, Box<dyn Error>> {
+fn solve_one_size(size: &SolveSize) -> Result<ActionValues, Box<dyn Error>> {
     let card_config = CardConfig {
         range: [BB_RANGE.parse()?, BTN_RANGE.parse()?],
         flop: flop_from_str(BOARD)?,
@@ -123,7 +127,7 @@ fn solve_one_size(ip_bet_size: &str) -> Result<ActionValues, Box<dyn Error>> {
         rake_cap: 300.0,
         flop_bet_sizes: [
             Default::default(),
-            BetSizeOptions::try_from((ip_bet_size, ""))?,
+            BetSizeOptions::try_from((size.tree_size, ""))?,
         ],
         turn_bet_sizes: Default::default(),
         river_bet_sizes: Default::default(),
@@ -144,8 +148,11 @@ fn solve_one_size(ip_bet_size: &str) -> Result<ActionValues, Box<dyn Error>> {
 
     let actions = game.available_actions();
     let check_index = find_action(&actions, |action| matches!(action, Action::Check))?;
-    let bet_index = find_action(&actions, |action| matches!(action, Action::Bet(_)))?;
-    let allin_index = find_action(&actions, |action| matches!(action, Action::AllIn(_)))?;
+    let expected_bet_amount = (600.0 * size.pot_fraction).round() as i32;
+    let bet_index = find_bet_action(&actions, expected_bet_amount, 2)?;
+    let allin_index = actions
+        .iter()
+        .position(|action| matches!(action, Action::AllIn(_)));
 
     let hand_index = find_hand_index(&game)?;
     let hand_count = game.private_cards(HERO_PLAYER).len();
@@ -157,8 +164,8 @@ fn solve_one_size(ip_bet_size: &str) -> Result<ActionValues, Box<dyn Error>> {
         check_ev: value_at(&evs, check_index, hand_index, hand_count),
         bet_freq: value_at(&strategy, bet_index, hand_index, hand_count),
         bet_ev: value_at(&evs, bet_index, hand_index, hand_count),
-        allin_freq: value_at(&strategy, allin_index, hand_index, hand_count),
-        allin_ev: value_at(&evs, allin_index, hand_index, hand_count),
+        allin_freq: allin_index.map(|index| value_at(&strategy, index, hand_index, hand_count)),
+        allin_ev: allin_index.map(|index| value_at(&evs, index, hand_index, hand_count)),
     })
 }
 
@@ -195,20 +202,56 @@ fn find_action(
         .ok_or_else(|| format!("action not found in {actions:?}").into())
 }
 
+fn find_bet_action(
+    actions: &[Action],
+    expected_amount: i32,
+    tolerance: i32,
+) -> Result<usize, Box<dyn Error>> {
+    actions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, action)| match action {
+            Action::Bet(amount) => Some((index, (*amount - expected_amount).abs())),
+            _ => None,
+        })
+        .filter(|(_, distance)| *distance <= tolerance)
+        .min_by_key(|(_, distance)| *distance)
+        .map(|(index, _)| index)
+        .ok_or_else(|| {
+            format!(
+                "bet action near {expected_amount} chips not found within {tolerance} chips in {actions:?}"
+            )
+            .into()
+        })
+}
+
 fn value_at(values: &[f32], action_index: usize, hand_index: usize, hand_count: usize) -> f32 {
     values[action_index * hand_count + hand_index]
 }
 
-fn best_action(check_ev: f32, bet_ev: f32, allin_ev: f32) -> (&'static str, f32) {
-    if check_ev >= bet_ev && check_ev >= allin_ev {
-        ("check", check_ev)
-    } else if bet_ev >= allin_ev {
-        ("bet_1", bet_ev)
-    } else {
-        ("allin", allin_ev)
+fn best_action(check_ev: f32, bet_ev: f32, allin_ev: Option<f32>) -> (&'static str, f32) {
+    let mut best_name = "check";
+    let mut best_ev = check_ev;
+
+    if bet_ev > best_ev {
+        best_name = "bet_1";
+        best_ev = bet_ev;
     }
+
+    if let Some(ev) = allin_ev {
+        if ev > best_ev {
+            best_name = "allin";
+            best_ev = ev;
+        }
+    }
+
+    (best_name, best_ev)
 }
 
 fn format_float(value: f32) -> String {
     format!("{value:.6}")
+}
+
+fn format_optional_float(value: Option<f32>) -> String {
+    value.map(format_float).unwrap_or_else(|| "null".to_string())
 }
