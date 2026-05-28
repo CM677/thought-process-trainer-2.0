@@ -247,19 +247,19 @@ fn calculate_pre_solve_stats(sizing: &Sizing) -> Result<PreSolveStats, Box<dyn E
     let mut hero_blocks_value_combos = 0.0;
     let mut villain_weighted_fold_combos = 0.0;
     let mut hero_blocks_fold_combos = 0.0;
+    let mut first_fold_details = Vec::new();
 
     for &(villain_a, villain_b) in game.private_cards(OOP_PLAYER) {
-        if overlaps_any(&[villain_a, villain_b], &[hero.0, hero.1]) {
-            continue;
+        if !hero_blocks_combo(villain_a, villain_b, hero) {
+            let villain_made_rank =
+                evaluate_5(&[villain_a, villain_b, board[0], board[1], board[2]]);
+            hero_equity_points += match hero_made_rank.cmp(&villain_made_rank) {
+                std::cmp::Ordering::Greater => 1.0,
+                std::cmp::Ordering::Equal => 0.5,
+                std::cmp::Ordering::Less => 0.0,
+            };
+            total_villain_combos += 1.0;
         }
-
-        let villain_made_rank = evaluate_5(&[villain_a, villain_b, board[0], board[1], board[2]]);
-        hero_equity_points += match hero_made_rank.cmp(&villain_made_rank) {
-            std::cmp::Ordering::Greater => 1.0,
-            std::cmp::Ordering::Equal => 0.5,
-            std::cmp::Ordering::Less => 0.0,
-        };
-        total_villain_combos += 1.0;
 
         let villain_equity = heads_up_equity_with_runouts((villain_a, villain_b), hero, board);
         let value_weight = if villain_equity >= 0.85 {
@@ -280,25 +280,45 @@ fn calculate_pre_solve_stats(sizing: &Sizing) -> Result<PreSolveStats, Box<dyn E
         villain_weighted_value_combos += value_weight;
         villain_weighted_fold_combos += fold_weight;
 
-        if value_weight > 0.0 && hero_blocks_combo(villain_a, villain_b, hero) {
+        let blocker_reason = hero_blocker_reason(villain_a, villain_b, hero);
+
+        if value_weight > 0.0 && blocker_reason.is_some() {
             hero_blocks_value_combos += value_weight;
             blocked_value_details.push(format!(
-                "{}{} equity={:.4} weight={:.1}",
+                "{}{} equity={:.4} weight={:.1} reason={}",
                 card_to_string(villain_a),
                 card_to_string(villain_b),
                 villain_equity,
-                value_weight
+                value_weight,
+                blocker_reason.unwrap()
             ));
         }
 
-        if fold_weight > 0.0 && hero_blocks_combo(villain_a, villain_b, hero) {
+        if fold_weight > 0.0 {
+            if first_fold_details.len() < 10 {
+                first_fold_details.push(format!(
+                    "{}{} equity={:.4} weight={:.1} blocked={}{}",
+                    card_to_string(villain_a),
+                    card_to_string(villain_b),
+                    villain_equity,
+                    fold_weight,
+                    blocker_reason.is_some(),
+                    blocker_reason
+                        .map(|reason| format!(" reason={reason}"))
+                        .unwrap_or_default()
+                ));
+            }
+        }
+
+        if fold_weight > 0.0 && blocker_reason.is_some() {
             hero_blocks_fold_combos += fold_weight;
             blocked_fold_details.push(format!(
-                "{}{} equity={:.4} weight={:.1}",
+                "{}{} equity={:.4} weight={:.1} reason={}",
                 card_to_string(villain_a),
                 card_to_string(villain_b),
                 villain_equity,
-                fold_weight
+                fold_weight,
+                blocker_reason.unwrap()
             ));
         }
     }
@@ -315,6 +335,7 @@ fn calculate_pre_solve_stats(sizing: &Sizing) -> Result<PreSolveStats, Box<dyn E
         hero_blocks_fold_combos,
         &blocked_fold_details,
     );
+    print_first_fold_combo_breakdown(&first_fold_details);
 
     Ok(PreSolveStats {
         hero_equity_vs_villain: hero_equity_points / total_villain_combos,
@@ -578,7 +599,22 @@ fn hero_blocks_combo(card_a: Card, card_b: Card, hero: (Card, Card)) -> bool {
     card_a == hero.0 || card_a == hero.1 || card_b == hero.0 || card_b == hero.1
 }
 
-fn print_blocker_breakdown(pool_name: &str, pool_weight: f32, blocked_weight: f32, details: &[String]) {
+fn hero_blocker_reason(card_a: Card, card_b: Card, hero: (Card, Card)) -> Option<&'static str> {
+    if card_a == hero.0 || card_b == hero.0 {
+        Some("contains Kh")
+    } else if card_a == hero.1 || card_b == hero.1 {
+        Some("contains 4h")
+    } else {
+        None
+    }
+}
+
+fn print_blocker_breakdown(
+    pool_name: &str,
+    pool_weight: f32,
+    blocked_weight: f32,
+    details: &[String],
+) {
     println!(
         "{} pool blocker breakdown: blocked_weight={:.1}, pool_weight={:.1}, blocked_combos={}",
         pool_name,
@@ -589,6 +625,18 @@ fn print_blocker_breakdown(pool_name: &str, pool_weight: f32, blocked_weight: f3
 
     if details.is_empty() {
         println!("  no blocked {pool_name} combos");
+    } else {
+        for detail in details {
+            println!("  {detail}");
+        }
+    }
+}
+
+fn print_first_fold_combo_breakdown(details: &[String]) {
+    println!("first 10 weighted fold combos:");
+
+    if details.is_empty() {
+        println!("  no weighted fold combos found");
     } else {
         for detail in details {
             println!("  {detail}");
@@ -622,10 +670,6 @@ fn card_to_string(card: Card) -> String {
     };
 
     format!("{rank}{suit}")
-}
-
-fn overlaps_any(cards: &[Card], dead_cards: &[Card]) -> bool {
-    cards.iter().any(|card| dead_cards.contains(card))
 }
 
 fn parse_board(board: &str) -> Result<[Card; 3], Box<dyn Error>> {
