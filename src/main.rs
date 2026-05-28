@@ -229,12 +229,12 @@ fn solve_sizing(
 
     Ok((
         RowValues {
-            check_freq: action_value(strategy, check_index, hand_index, hand_count),
-            check_ev: ev_to_bb(action_value(evs, check_index, hand_index, hand_count)),
-            bet_1_freq: action_value(strategy, bet_1_index, hand_index, hand_count),
-            bet_1_ev: ev_to_bb(action_value(evs, bet_1_index, hand_index, hand_count)),
-            allin_freq: allin_index.map(|index| action_value(strategy, index, hand_index, hand_count)),
-            allin_ev: allin_index.map(|index| ev_to_bb(action_value(evs, index, hand_index, hand_count))),
+            check_freq: action_value(&strategy, check_index, hand_index, hand_count),
+            check_ev: ev_to_bb(action_value(&evs, check_index, hand_index, hand_count)),
+            bet_1_freq: action_value(&strategy, bet_1_index, hand_index, hand_count),
+            bet_1_ev: ev_to_bb(action_value(&evs, bet_1_index, hand_index, hand_count)),
+            allin_freq: allin_index.map(|index| action_value(&strategy, index, hand_index, hand_count)),
+            allin_ev: allin_index.map(|index| ev_to_bb(action_value(&evs, index, hand_index, hand_count))),
         },
         equity_with_draws,
         villain_cards,
