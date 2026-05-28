@@ -14,9 +14,6 @@ const BTN_RANGE: &str =
     "22+,A2s+,K2s+,Q2s+,A2o+,K7o+,Q9o+,J9o+,T9o,J4s+,T6s+,96s+,86s+,75s+,65s,54s";
 const BB_RANGE: &str = "99-22,AQs-A6s,KJs-K2s,J7s-J4s,T6s,97s-96s,87s-85s,75s-74s,64s-63s,53s,43s,AJo-A6o,K9o+,QTo+,JTo,QTs-Q2s,A4s-A2s,T9o";
 const OOP_PLAYER: usize = 0;
-const KING_RANK: u8 = 11;
-const FOUR_RANK: u8 = 2;
-const HEART_SUIT: u8 = 2;
 
 struct Sizing {
     tree_size: &'static str,
@@ -241,6 +238,8 @@ fn calculate_pre_solve_stats(sizing: &Sizing) -> Result<PreSolveStats, Box<dyn E
     let hero = parse_hand(HAND)?;
     let board = parse_board(BOARD)?;
     let hero_made_rank = evaluate_5(&[hero.0, hero.1, board[0], board[1], board[2]]);
+    let mut blocked_value_details = Vec::new();
+    let mut blocked_fold_details = Vec::new();
 
     let mut hero_equity_points = 0.0;
     let mut total_villain_combos = 0.0;
@@ -277,16 +276,45 @@ fn calculate_pre_solve_stats(sizing: &Sizing) -> Result<PreSolveStats, Box<dyn E
         } else {
             0.0
         };
-        let blocked = hero_blocks_combo(villain_a, villain_b);
 
         villain_weighted_value_combos += value_weight;
         villain_weighted_fold_combos += fold_weight;
 
-        if blocked {
+        if value_weight > 0.0 && hero_blocks_combo(villain_a, villain_b, hero) {
             hero_blocks_value_combos += value_weight;
+            blocked_value_details.push(format!(
+                "{}{} equity={:.4} weight={:.1}",
+                card_to_string(villain_a),
+                card_to_string(villain_b),
+                villain_equity,
+                value_weight
+            ));
+        }
+
+        if fold_weight > 0.0 && hero_blocks_combo(villain_a, villain_b, hero) {
             hero_blocks_fold_combos += fold_weight;
+            blocked_fold_details.push(format!(
+                "{}{} equity={:.4} weight={:.1}",
+                card_to_string(villain_a),
+                card_to_string(villain_b),
+                villain_equity,
+                fold_weight
+            ));
         }
     }
+
+    print_blocker_breakdown(
+        "value",
+        villain_weighted_value_combos,
+        hero_blocks_value_combos,
+        &blocked_value_details,
+    );
+    print_blocker_breakdown(
+        "fold",
+        villain_weighted_fold_combos,
+        hero_blocks_fold_combos,
+        &blocked_fold_details,
+    );
 
     Ok(PreSolveStats {
         hero_equity_vs_villain: hero_equity_points / total_villain_combos,
@@ -546,10 +574,54 @@ fn encode_rank(category: u8, ranks: &[u8]) -> u32 {
     value
 }
 
-fn hero_blocks_combo(card_a: Card, card_b: Card) -> bool {
-    [card_a, card_b]
-        .iter()
-        .any(|&card| rank(card) == KING_RANK || rank(card) == FOUR_RANK || suit(card) == HEART_SUIT)
+fn hero_blocks_combo(card_a: Card, card_b: Card, hero: (Card, Card)) -> bool {
+    card_a == hero.0 || card_a == hero.1 || card_b == hero.0 || card_b == hero.1
+}
+
+fn print_blocker_breakdown(pool_name: &str, pool_weight: f32, blocked_weight: f32, details: &[String]) {
+    println!(
+        "{} pool blocker breakdown: blocked_weight={:.1}, pool_weight={:.1}, blocked_combos={}",
+        pool_name,
+        blocked_weight,
+        pool_weight,
+        details.len()
+    );
+
+    if details.is_empty() {
+        println!("  no blocked {pool_name} combos");
+    } else {
+        for detail in details {
+            println!("  {detail}");
+        }
+    }
+}
+
+fn card_to_string(card: Card) -> String {
+    let rank = match rank(card) {
+        0 => '2',
+        1 => '3',
+        2 => '4',
+        3 => '5',
+        4 => '6',
+        5 => '7',
+        6 => '8',
+        7 => '9',
+        8 => 'T',
+        9 => 'J',
+        10 => 'Q',
+        11 => 'K',
+        12 => 'A',
+        _ => '?',
+    };
+    let suit = match suit(card) {
+        0 => 'c',
+        1 => 'd',
+        2 => 'h',
+        3 => 's',
+        _ => '?',
+    };
+
+    format!("{rank}{suit}")
 }
 
 fn overlaps_any(cards: &[Card], dead_cards: &[Card]) -> bool {
