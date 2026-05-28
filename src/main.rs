@@ -1,7 +1,11 @@
 use postflop_solver::*;
+use serde::Deserialize;
 use std::error::Error;
+use std::fs::File;
+use std::path::PathBuf;
 
 const OUTPUT_FILE: &str = "output4.csv";
+const SPOTS_FILE: &str = "spots.json";
 
 const OOP_PLAYER: usize = 0;
 const HERO_PLAYER: usize = 1;
@@ -9,36 +13,24 @@ const BB_CHIPS: f32 = 100.0;
 const STARTING_POT: i32 = 600;
 const EFFECTIVE_STACK: i32 = 9750;
 
-const BOARD: &str = "Ah7s4c";
+const HAND: &str = "Kh4h";
 const BTN_RANGE: &str =
     "22+,A2s+,K2s+,Q2s+,A2o+,K7o+,Q9o+,J9o+,T9o,J4s+,T6s+,96s+,86s+,75s+,65s,54s";
 const BB_RANGE: &str = "99-22,AQs-A6s,KJs-K2s,J7s-J4s,T6s,97s-96s,87s-85s,75s-74s,64s-63s,53s,43s,AJo-A6o,K9o+,QTo+,JTo,QTs-Q2s,A4s-A2s,T9o";
+
+#[derive(Debug, Deserialize)]
+struct Spot {
+    id: String,
+    position_matchup: String,
+    pot_type: String,
+    board: String,
+}
 
 #[derive(Clone, Copy)]
 struct Sizing {
     tree_size: &'static str,
     csv_size: &'static str,
     suffix: &'static str,
-}
-
-#[derive(Clone)]
-struct HandCombo {
-    cards: (Card, Card),
-    label: String,
-    strategy_index: usize,
-}
-
-struct SolvedSizing {
-    sizing: Sizing,
-    hands: Vec<HandCombo>,
-    villain_cards: Vec<(Card, Card)>,
-    equity_with_draws: Vec<f32>,
-    strategy: Vec<f32>,
-    evs: Vec<f32>,
-    check_index: usize,
-    bet_1_index: usize,
-    allin_index: Option<usize>,
-    hand_count: usize,
 }
 
 struct RowValues {
@@ -60,6 +52,10 @@ struct HandStats {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let spot = load_first_spot()?;
+    let board = parse_board(&spot.board)?;
+    let hero = parse_hand(HAND)?;
+
     let sizings = [
         Sizing {
             tree_size: "33%",
@@ -78,73 +74,95 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     ];
 
-    let solved_sizings = solve_all_sizings(&sizings)?;
-    let first_solve = solved_sizings
-        .first()
-        .ok_or("no solved sizings were produced")?;
-    let board = parse_board(BOARD)?;
-    let hand_stats = calculate_all_hand_stats(
-        &first_solve.hands,
-        &first_solve.villain_cards,
-        &first_solve.equity_with_draws,
-        board,
-    );
-
     let mut writer = csv::Writer::from_path(OUTPUT_FILE)?;
     write_header(&mut writer)?;
 
-    for solved in &solved_sizings {
-        for (hand_index, hand) in solved.hands.iter().enumerate() {
-            let values = row_values(solved, hand.strategy_index);
-            let stats = &hand_stats[hand_index];
-            let (best_action, best_ev) =
-                best_action(values.check_ev, values.bet_1_ev, values.allin_ev);
+    let mut rows_written = 0;
+    let mut cached_stats: Option<HandStats> = None;
 
-            writer.write_record([
-                format!(
-                    "btn-vs-bb-srp-01-flop-hero_betting_ip-{}",
-                    solved.sizing.suffix
-                ),
-                "flop".to_string(),
-                hand.label.clone(),
-                BOARD.to_string(),
-                "ip".to_string(),
-                "srp".to_string(),
-                "null".to_string(),
-                format_float(values.check_freq),
-                format_float(values.check_ev),
-                solved.sizing.csv_size.to_string(),
-                format_float(values.bet_1_freq),
-                format_float(values.bet_1_ev),
-                format_optional_float(values.allin_freq),
-                format_optional_float(values.allin_ev),
-                "null".to_string(),
-                "null".to_string(),
-                "null".to_string(),
-                "null".to_string(),
-                "null".to_string(),
-                "null".to_string(),
-                "null".to_string(),
-                best_action.to_string(),
-                format_float(best_ev),
-                format_float(stats.hero_equity_vs_villain),
-                format_float(stats.equity_with_draws),
-                format_float(stats.villain_weighted_value_combos),
-                format_float(stats.hero_blocks_value_combos),
-                format_float(stats.villain_weighted_fold_combos),
-                format_float(stats.hero_blocks_fold_combos),
-            ])?;
-        }
+    for sizing in sizings {
+        let (values, equity_with_draws, villain_cards) = solve_sizing(sizing, &spot.board)?;
+        let stats = cached_stats.get_or_insert_with(|| {
+            calculate_hand_stats(hero, &villain_cards, equity_with_draws, board)
+        });
+        let (best_action, best_ev) =
+            best_action(values.check_ev, values.bet_1_ev, values.allin_ev);
+
+        writer.write_record([
+            format!(
+                "{}-{}-{}-flop-hero_betting_ip-{}",
+                spot.position_matchup, spot.pot_type, spot.id, sizing.suffix
+            ),
+            "flop".to_string(),
+            HAND.to_string(),
+            spot.board.clone(),
+            "ip".to_string(),
+            spot.pot_type.clone(),
+            "null".to_string(),
+            format_float(values.check_freq),
+            format_float(values.check_ev),
+            sizing.csv_size.to_string(),
+            format_float(values.bet_1_freq),
+            format_float(values.bet_1_ev),
+            format_optional_float(values.allin_freq),
+            format_optional_float(values.allin_ev),
+            "null".to_string(),
+            "null".to_string(),
+            "null".to_string(),
+            "null".to_string(),
+            "null".to_string(),
+            "null".to_string(),
+            "null".to_string(),
+            best_action.to_string(),
+            format_float(best_ev),
+            format_float(stats.hero_equity_vs_villain),
+            format_float(stats.equity_with_draws),
+            format_float(stats.villain_weighted_value_combos),
+            format_float(stats.hero_blocks_value_combos),
+            format_float(stats.villain_weighted_fold_combos),
+            format_float(stats.hero_blocks_fold_combos),
+        ])?;
+        rows_written += 1;
+        println!(
+            "Wrote row {} for {} sizing ({HAND} on {})",
+            rows_written, sizing.tree_size, spot.board
+        );
     }
 
     writer.flush()?;
-    println!(
-        "Wrote {OUTPUT_FILE} with {} hands x {} sizings = {} rows",
-        first_solve.hands.len(),
-        solved_sizings.len(),
-        first_solve.hands.len() * solved_sizings.len()
-    );
+    println!("Done. Written {rows_written} rows to {OUTPUT_FILE}");
     Ok(())
+}
+
+fn load_first_spot() -> Result<Spot, Box<dyn Error>> {
+    let path = spots_path()?;
+    let file = File::open(&path)?;
+    let mut spots: Vec<Spot> = serde_json::from_reader(file)?;
+
+    if spots.is_empty() {
+        return Err(format!("no spots found in {}", path.display()).into());
+    }
+
+    Ok(spots.remove(0))
+}
+
+fn spots_path() -> Result<PathBuf, Box<dyn Error>> {
+    let exe_path = std::env::current_exe()?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or("could not determine binary directory")?;
+    let exe_spots = exe_dir.join(SPOTS_FILE);
+
+    if exe_spots.exists() {
+        return Ok(exe_spots);
+    }
+
+    let cwd_spots = std::env::current_dir()?.join(SPOTS_FILE);
+    if cwd_spots.exists() {
+        return Ok(cwd_spots);
+    }
+
+    Ok(exe_spots)
 }
 
 fn write_header(writer: &mut csv::Writer<std::fs::File>) -> Result<(), Box<dyn Error>> {
@@ -182,34 +200,19 @@ fn write_header(writer: &mut csv::Writer<std::fs::File>) -> Result<(), Box<dyn E
     Ok(())
 }
 
-fn solve_all_sizings(sizings: &[Sizing; 3]) -> Result<Vec<SolvedSizing>, Box<dyn Error>> {
-    let mut solved = Vec::new();
-
-    for sizing in sizings {
-        let solved_sizing = solve_sizing(*sizing)?;
-        println!("Solved {} sizing, iterating hands...", sizing.tree_size);
-        solved.push(solved_sizing);
-    }
-
-    Ok(solved)
-}
-
-fn solve_sizing(sizing: Sizing) -> Result<SolvedSizing, Box<dyn Error>> {
-    let mut game = build_game(sizing)?;
+fn solve_sizing(
+    sizing: Sizing,
+    board_text: &str,
+) -> Result<(RowValues, f32, Vec<(Card, Card)>), Box<dyn Error>> {
+    let mut game = build_game(sizing, board_text)?;
     game.allocate_memory(false);
     solve(&mut game, 50, 0.5, true);
 
     game.back_to_root();
     game.cache_normalized_weights();
-    let hands = live_hero_hands(&game)?;
-    let board = parse_board(BOARD)?;
-    let villain_cards = game
-        .private_cards(OOP_PLAYER)
-        .iter()
-        .copied()
-        .filter(|(card_a, card_b)| !board.contains(card_a) && !board.contains(card_b))
-        .collect();
-    let equity_with_draws = game.equity(HERO_PLAYER).to_vec();
+    let hand_index = find_hand_index(&game)?;
+    let equity_with_draws = game.equity(HERO_PLAYER)[hand_index];
+    let villain_cards = game.private_cards(OOP_PLAYER).to_vec();
 
     move_to_hero_root_decision(&mut game)?;
     game.cache_normalized_weights();
@@ -221,27 +224,27 @@ fn solve_sizing(sizing: Sizing) -> Result<SolvedSizing, Box<dyn Error>> {
         .iter()
         .position(|action| matches!(action, Action::AllIn(_)));
     let hand_count = game.private_cards(HERO_PLAYER).len();
-    let strategy = game.strategy().to_vec();
-    let evs = game.expected_values_detail(HERO_PLAYER).to_vec();
+    let strategy = game.strategy();
+    let evs = game.expected_values_detail(HERO_PLAYER);
 
-    Ok(SolvedSizing {
-        sizing,
-        hands,
-        villain_cards,
+    Ok((
+        RowValues {
+            check_freq: action_value(strategy, check_index, hand_index, hand_count),
+            check_ev: ev_to_bb(action_value(evs, check_index, hand_index, hand_count)),
+            bet_1_freq: action_value(strategy, bet_1_index, hand_index, hand_count),
+            bet_1_ev: ev_to_bb(action_value(evs, bet_1_index, hand_index, hand_count)),
+            allin_freq: allin_index.map(|index| action_value(strategy, index, hand_index, hand_count)),
+            allin_ev: allin_index.map(|index| ev_to_bb(action_value(evs, index, hand_index, hand_count))),
+        },
         equity_with_draws,
-        strategy,
-        evs,
-        check_index,
-        bet_1_index,
-        allin_index,
-        hand_count,
-    })
+        villain_cards,
+    ))
 }
 
-fn build_game(sizing: Sizing) -> Result<PostFlopGame, Box<dyn Error>> {
+fn build_game(sizing: Sizing, board_text: &str) -> Result<PostFlopGame, Box<dyn Error>> {
     let card_config = CardConfig {
         range: [BB_RANGE.parse()?, BTN_RANGE.parse()?],
-        flop: flop_from_str(BOARD)?,
+        flop: flop_from_str(board_text)?,
         turn: NOT_DEALT,
         river: NOT_DEALT,
     };
@@ -267,46 +270,6 @@ fn build_game(sizing: Sizing) -> Result<PostFlopGame, Box<dyn Error>> {
 
     let action_tree = ActionTree::new(tree_config)?;
     Ok(PostFlopGame::with_config(card_config, action_tree)?)
-}
-
-fn live_hero_hands(game: &PostFlopGame) -> Result<Vec<HandCombo>, Box<dyn Error>> {
-    let board = parse_board(BOARD)?;
-    let cards = game.private_cards(HERO_PLAYER);
-    let labels = holes_to_strings(cards)?;
-    let mut hands = Vec::new();
-
-    for (index, &(card_a, card_b)) in cards.iter().enumerate() {
-        if [card_a, card_b].iter().any(|card| board.contains(card)) {
-            continue;
-        }
-
-        hands.push(HandCombo {
-            cards: (card_a, card_b),
-            label: labels[index].clone(),
-            strategy_index: index,
-        });
-    }
-
-    Ok(hands)
-}
-
-fn calculate_all_hand_stats(
-    hands: &[HandCombo],
-    villain_cards: &[(Card, Card)],
-    equity_with_draws: &[f32],
-    board: [Card; 3],
-) -> Vec<HandStats> {
-    hands
-        .iter()
-        .map(|hand| {
-            calculate_hand_stats(
-                hand.cards,
-                villain_cards,
-                equity_with_draws[hand.strategy_index],
-                board,
-            )
-        })
-        .collect()
 }
 
 fn calculate_hand_stats(
@@ -372,41 +335,6 @@ fn calculate_hand_stats(
     }
 }
 
-fn row_values(solved: &SolvedSizing, hand_index: usize) -> RowValues {
-    RowValues {
-        check_freq: action_value(
-            &solved.strategy,
-            solved.check_index,
-            hand_index,
-            solved.hand_count,
-        ),
-        check_ev: ev_to_bb(action_value(
-            &solved.evs,
-            solved.check_index,
-            hand_index,
-            solved.hand_count,
-        )),
-        bet_1_freq: action_value(
-            &solved.strategy,
-            solved.bet_1_index,
-            hand_index,
-            solved.hand_count,
-        ),
-        bet_1_ev: ev_to_bb(action_value(
-            &solved.evs,
-            solved.bet_1_index,
-            hand_index,
-            solved.hand_count,
-        )),
-        allin_freq: solved.allin_index.map(|index| {
-            action_value(&solved.strategy, index, hand_index, solved.hand_count)
-        }),
-        allin_ev: solved.allin_index.map(|index| {
-            ev_to_bb(action_value(&solved.evs, index, hand_index, solved.hand_count))
-        }),
-    }
-}
-
 fn move_to_hero_root_decision(game: &mut PostFlopGame) -> Result<(), Box<dyn Error>> {
     game.back_to_root();
 
@@ -427,6 +355,15 @@ fn move_to_hero_root_decision(game: &mut PostFlopGame) -> Result<(), Box<dyn Err
     }
 
     Ok(())
+}
+
+fn find_hand_index(game: &PostFlopGame) -> Result<usize, Box<dyn Error>> {
+    let hands = holes_to_strings(game.private_cards(HERO_PLAYER))?;
+
+    hands
+        .iter()
+        .position(|hand| hand == HAND)
+        .ok_or_else(|| format!("{HAND} was not found for player {HERO_PLAYER}").into())
 }
 
 fn find_action(
@@ -633,6 +570,14 @@ fn parse_board(board: &str) -> Result<[Card; 3], Box<dyn Error>> {
         parse_card(&board[2..4])?,
         parse_card(&board[4..6])?,
     ])
+}
+
+fn parse_hand(hand: &str) -> Result<(Card, Card), Box<dyn Error>> {
+    if hand.len() != 4 {
+        return Err(format!("hand must contain exactly 2 cards: {hand}").into());
+    }
+
+    Ok((parse_card(&hand[0..2])?, parse_card(&hand[2..4])?))
 }
 
 fn parse_card(card: &str) -> Result<Card, Box<dyn Error>> {
