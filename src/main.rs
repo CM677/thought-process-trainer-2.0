@@ -29,8 +29,8 @@ struct RowValues {
     check_ev: f32,
     bet_1_freq: f32,
     bet_1_ev: f32,
-    allin_freq: f32,
-    allin_ev: f32,
+    allin_freq: Option<f32>,
+    allin_ev: Option<f32>,
 }
 
 struct SharedStats {
@@ -135,8 +135,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             sizing.csv_size.to_string(),
             format_float(values.bet_1_freq),
             format_float(values.bet_1_ev),
-            format_float(values.allin_freq),
-            format_float(values.allin_ev),
+            format_optional_float(values.allin_freq),
+            format_optional_float(values.allin_ev),
             "null".to_string(),
             "null".to_string(),
             "null".to_string(),
@@ -183,7 +183,9 @@ fn solve_sizing(
     let actions = game.available_actions();
     let check_index = find_action(&actions, |action| matches!(action, Action::Check))?;
     let bet_1_index = find_action(&actions, |action| matches!(action, Action::Bet(_)))?;
-    let allin_index = find_action(&actions, |action| matches!(action, Action::AllIn(_)))?;
+    let allin_index = actions
+        .iter()
+        .position(|action| matches!(action, Action::AllIn(_)));
 
     let hand_index = find_hand_index(&game)?;
     let hand_count = game.private_cards(HERO_PLAYER).len();
@@ -196,8 +198,8 @@ fn solve_sizing(
             check_ev: ev_to_bb(action_value(&evs, check_index, hand_index, hand_count)),
             bet_1_freq: action_value(&strategy, bet_1_index, hand_index, hand_count),
             bet_1_ev: ev_to_bb(action_value(&evs, bet_1_index, hand_index, hand_count)),
-            allin_freq: action_value(&strategy, allin_index, hand_index, hand_count),
-            allin_ev: ev_to_bb(action_value(&evs, allin_index, hand_index, hand_count)),
+            allin_freq: allin_index.map(|index| action_value(&strategy, index, hand_index, hand_count)),
+            allin_ev: allin_index.map(|index| ev_to_bb(action_value(&evs, index, hand_index, hand_count))),
         },
         equity_with_draws,
     ))
@@ -344,28 +346,44 @@ fn ev_to_bb(ev_in_chips: f32) -> f32 {
     ev_in_chips / BB_CHIPS
 }
 
-fn best_action(check_ev: f32, bet_1_ev: f32, allin_ev: f32) -> (&'static str, f32) {
-    if check_ev >= bet_1_ev && check_ev >= allin_ev {
-        ("check", check_ev)
-    } else if bet_1_ev >= allin_ev {
-        ("bet_1", bet_1_ev)
-    } else {
-        ("allin", allin_ev)
+fn best_action(check_ev: f32, bet_1_ev: f32, allin_ev: Option<f32>) -> (&'static str, f32) {
+    let mut best_name = "check";
+    let mut best_ev = check_ev;
+
+    if bet_1_ev > best_ev {
+        best_name = "bet_1";
+        best_ev = bet_1_ev;
     }
+
+    if let Some(ev) = allin_ev {
+        if ev > best_ev {
+            best_name = "allin";
+            best_ev = ev;
+        }
+    }
+
+    (best_name, best_ev)
 }
 
 fn print_sanity_check(sizing: &Sizing, values: &RowValues) {
     println!(
-        "Solved {} sizing: check_ev={:.4} BB, bet_1_ev={:.4} BB, allin_ev={:.4} BB",
-        sizing.csv_size, values.check_ev, values.bet_1_ev, values.allin_ev
+        "Solved {} sizing: check_ev={:.4} BB, bet_1_ev={:.4} BB, allin_ev={} BB",
+        sizing.csv_size,
+        values.check_ev,
+        values.bet_1_ev,
+        format_optional_float(values.allin_ev)
     );
+
+    let allin_ev_failed = values
+        .allin_ev
+        .map(|ev| ev > 50.0 || ev < 0.0)
+        .unwrap_or(false);
 
     if values.check_ev > 50.0
         || values.bet_1_ev > 50.0
-        || values.allin_ev > 50.0
         || values.check_ev < 0.0
         || values.bet_1_ev < 0.0
-        || values.allin_ev < 0.0
+        || allin_ev_failed
     {
         eprintln!("WARNING: EV sanity check failed; EV conversion may be wrong.");
     }
@@ -373,6 +391,10 @@ fn print_sanity_check(sizing: &Sizing, values: &RowValues) {
 
 fn format_float(value: f32) -> String {
     format!("{value:.6}")
+}
+
+fn format_optional_float(value: Option<f32>) -> String {
+    value.map(format_float).unwrap_or_else(|| "null".to_string())
 }
 
 fn heads_up_equity_with_runouts(
