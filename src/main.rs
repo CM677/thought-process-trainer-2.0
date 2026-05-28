@@ -3,22 +3,42 @@ use std::error::Error;
 
 const OUTPUT_FILE: &str = "output4.csv";
 
+const OOP_PLAYER: usize = 0;
 const HERO_PLAYER: usize = 1;
 const BB_CHIPS: f32 = 100.0;
 const STARTING_POT: i32 = 600;
 const EFFECTIVE_STACK: i32 = 9750;
 
-const HAND: &str = "Kh4h";
 const BOARD: &str = "Ah7s4c";
 const BTN_RANGE: &str =
     "22+,A2s+,K2s+,Q2s+,A2o+,K7o+,Q9o+,J9o+,T9o,J4s+,T6s+,96s+,86s+,75s+,65s,54s";
 const BB_RANGE: &str = "99-22,AQs-A6s,KJs-K2s,J7s-J4s,T6s,97s-96s,87s-85s,75s-74s,64s-63s,53s,43s,AJo-A6o,K9o+,QTo+,JTo,QTs-Q2s,A4s-A2s,T9o";
-const OOP_PLAYER: usize = 0;
 
+#[derive(Clone, Copy)]
 struct Sizing {
     tree_size: &'static str,
     csv_size: &'static str,
     suffix: &'static str,
+}
+
+#[derive(Clone)]
+struct HandCombo {
+    cards: (Card, Card),
+    label: String,
+    strategy_index: usize,
+}
+
+struct SolvedSizing {
+    sizing: Sizing,
+    hands: Vec<HandCombo>,
+    villain_cards: Vec<(Card, Card)>,
+    equity_with_draws: Vec<f32>,
+    strategy: Vec<f32>,
+    evs: Vec<f32>,
+    check_index: usize,
+    bet_1_index: usize,
+    allin_index: Option<usize>,
+    hand_count: usize,
 }
 
 struct RowValues {
@@ -30,17 +50,9 @@ struct RowValues {
     allin_ev: Option<f32>,
 }
 
-struct SharedStats {
+struct HandStats {
     hero_equity_vs_villain: f32,
     equity_with_draws: f32,
-    villain_weighted_value_combos: f32,
-    hero_blocks_value_combos: f32,
-    villain_weighted_fold_combos: f32,
-    hero_blocks_fold_combos: f32,
-}
-
-struct PreSolveStats {
-    hero_equity_vs_villain: f32,
     villain_weighted_value_combos: f32,
     hero_blocks_value_combos: f32,
     villain_weighted_fold_combos: f32,
@@ -66,10 +78,76 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     ];
 
-    let pre_solve_stats = calculate_pre_solve_stats(&sizings[0])?;
-    let mut shared_stats: Option<SharedStats> = None;
+    let solved_sizings = solve_all_sizings(&sizings)?;
+    let first_solve = solved_sizings
+        .first()
+        .ok_or("no solved sizings were produced")?;
+    let board = parse_board(BOARD)?;
+    let hand_stats = calculate_all_hand_stats(
+        &first_solve.hands,
+        &first_solve.villain_cards,
+        &first_solve.equity_with_draws,
+        board,
+    );
 
     let mut writer = csv::Writer::from_path(OUTPUT_FILE)?;
+    write_header(&mut writer)?;
+
+    for solved in &solved_sizings {
+        for (hand_index, hand) in solved.hands.iter().enumerate() {
+            let values = row_values(solved, hand.strategy_index);
+            let stats = &hand_stats[hand_index];
+            let (best_action, best_ev) =
+                best_action(values.check_ev, values.bet_1_ev, values.allin_ev);
+
+            writer.write_record([
+                format!(
+                    "btn-vs-bb-srp-01-flop-hero_betting_ip-{}",
+                    solved.sizing.suffix
+                ),
+                "flop".to_string(),
+                hand.label.clone(),
+                BOARD.to_string(),
+                "ip".to_string(),
+                "srp".to_string(),
+                "null".to_string(),
+                format_float(values.check_freq),
+                format_float(values.check_ev),
+                solved.sizing.csv_size.to_string(),
+                format_float(values.bet_1_freq),
+                format_float(values.bet_1_ev),
+                format_optional_float(values.allin_freq),
+                format_optional_float(values.allin_ev),
+                "null".to_string(),
+                "null".to_string(),
+                "null".to_string(),
+                "null".to_string(),
+                "null".to_string(),
+                "null".to_string(),
+                "null".to_string(),
+                best_action.to_string(),
+                format_float(best_ev),
+                format_float(stats.hero_equity_vs_villain),
+                format_float(stats.equity_with_draws),
+                format_float(stats.villain_weighted_value_combos),
+                format_float(stats.hero_blocks_value_combos),
+                format_float(stats.villain_weighted_fold_combos),
+                format_float(stats.hero_blocks_fold_combos),
+            ])?;
+        }
+    }
+
+    writer.flush()?;
+    println!(
+        "Wrote {OUTPUT_FILE} with {} hands x {} sizings = {} rows",
+        first_solve.hands.len(),
+        solved_sizings.len(),
+        first_solve.hands.len() * solved_sizings.len()
+    );
+    Ok(())
+}
+
+fn write_header(writer: &mut csv::Writer<std::fs::File>) -> Result<(), Box<dyn Error>> {
     writer.write_record([
         "spot_name",
         "street",
@@ -101,78 +179,37 @@ fn main() -> Result<(), Box<dyn Error>> {
         "villain_weighted_fold_combos",
         "hero_blocks_fold_combos",
     ])?;
-
-    for sizing in sizings {
-        let (values, equity_with_draws) = solve_sizing(&sizing, shared_stats.is_none())?;
-        let stats = shared_stats.get_or_insert_with(|| SharedStats {
-            hero_equity_vs_villain: pre_solve_stats.hero_equity_vs_villain,
-            equity_with_draws: equity_with_draws
-                .expect("first solve must return hero equity including draws"),
-            villain_weighted_value_combos: pre_solve_stats.villain_weighted_value_combos,
-            hero_blocks_value_combos: pre_solve_stats.hero_blocks_value_combos,
-            villain_weighted_fold_combos: pre_solve_stats.villain_weighted_fold_combos,
-            hero_blocks_fold_combos: pre_solve_stats.hero_blocks_fold_combos,
-        });
-
-        print_sanity_check(&sizing, &values);
-
-        let (best_action, best_ev) =
-            best_action(values.check_ev, values.bet_1_ev, values.allin_ev);
-
-        writer.write_record([
-            format!("btn-vs-bb-srp-01-flop-hero_betting_ip-{}", sizing.suffix),
-            "flop".to_string(),
-            HAND.to_string(),
-            BOARD.to_string(),
-            "ip".to_string(),
-            "srp".to_string(),
-            "null".to_string(),
-            format_float(values.check_freq),
-            format_float(values.check_ev),
-            sizing.csv_size.to_string(),
-            format_float(values.bet_1_freq),
-            format_float(values.bet_1_ev),
-            format_optional_float(values.allin_freq),
-            format_optional_float(values.allin_ev),
-            "null".to_string(),
-            "null".to_string(),
-            "null".to_string(),
-            "null".to_string(),
-            "null".to_string(),
-            "null".to_string(),
-            "null".to_string(),
-            best_action.to_string(),
-            format_float(best_ev),
-            format_float(stats.hero_equity_vs_villain),
-            format_float(stats.equity_with_draws),
-            format_float(stats.villain_weighted_value_combos),
-            format_float(stats.hero_blocks_value_combos),
-            format_float(stats.villain_weighted_fold_combos),
-            format_float(stats.hero_blocks_fold_combos),
-        ])?;
-    }
-
-    writer.flush()?;
-    println!("Wrote {OUTPUT_FILE}");
     Ok(())
 }
 
-fn solve_sizing(
-    sizing: &Sizing,
-    capture_equity_with_draws: bool,
-) -> Result<(RowValues, Option<f32>), Box<dyn Error>> {
+fn solve_all_sizings(sizings: &[Sizing; 3]) -> Result<Vec<SolvedSizing>, Box<dyn Error>> {
+    let mut solved = Vec::new();
+
+    for sizing in sizings {
+        let solved_sizing = solve_sizing(*sizing)?;
+        println!("Solved {} sizing, iterating hands...", sizing.tree_size);
+        solved.push(solved_sizing);
+    }
+
+    Ok(solved)
+}
+
+fn solve_sizing(sizing: Sizing) -> Result<SolvedSizing, Box<dyn Error>> {
     let mut game = build_game(sizing)?;
     game.allocate_memory(false);
     solve(&mut game, 50, 0.5, true);
 
-    let equity_with_draws = if capture_equity_with_draws {
-        game.back_to_root();
-        game.cache_normalized_weights();
-        let hand_index = find_hand_index(&game)?;
-        Some(game.equity(HERO_PLAYER)[hand_index])
-    } else {
-        None
-    };
+    game.back_to_root();
+    game.cache_normalized_weights();
+    let hands = live_hero_hands(&game)?;
+    let board = parse_board(BOARD)?;
+    let villain_cards = game
+        .private_cards(OOP_PLAYER)
+        .iter()
+        .copied()
+        .filter(|(card_a, card_b)| !board.contains(card_a) && !board.contains(card_b))
+        .collect();
+    let equity_with_draws = game.equity(HERO_PLAYER).to_vec();
 
     move_to_hero_root_decision(&mut game)?;
     game.cache_normalized_weights();
@@ -183,26 +220,25 @@ fn solve_sizing(
     let allin_index = actions
         .iter()
         .position(|action| matches!(action, Action::AllIn(_)));
-
-    let hand_index = find_hand_index(&game)?;
     let hand_count = game.private_cards(HERO_PLAYER).len();
-    let strategy = game.strategy();
-    let evs = game.expected_values_detail(HERO_PLAYER);
+    let strategy = game.strategy().to_vec();
+    let evs = game.expected_values_detail(HERO_PLAYER).to_vec();
 
-    Ok((
-        RowValues {
-            check_freq: action_value(&strategy, check_index, hand_index, hand_count),
-            check_ev: ev_to_bb(action_value(&evs, check_index, hand_index, hand_count)),
-            bet_1_freq: action_value(&strategy, bet_1_index, hand_index, hand_count),
-            bet_1_ev: ev_to_bb(action_value(&evs, bet_1_index, hand_index, hand_count)),
-            allin_freq: allin_index.map(|index| action_value(&strategy, index, hand_index, hand_count)),
-            allin_ev: allin_index.map(|index| ev_to_bb(action_value(&evs, index, hand_index, hand_count))),
-        },
+    Ok(SolvedSizing {
+        sizing,
+        hands,
+        villain_cards,
         equity_with_draws,
-    ))
+        strategy,
+        evs,
+        check_index,
+        bet_1_index,
+        allin_index,
+        hand_count,
+    })
 }
 
-fn build_game(sizing: &Sizing) -> Result<PostFlopGame, Box<dyn Error>> {
+fn build_game(sizing: Sizing) -> Result<PostFlopGame, Box<dyn Error>> {
     let card_config = CardConfig {
         range: [BB_RANGE.parse()?, BTN_RANGE.parse()?],
         flop: flop_from_str(BOARD)?,
@@ -233,24 +269,64 @@ fn build_game(sizing: &Sizing) -> Result<PostFlopGame, Box<dyn Error>> {
     Ok(PostFlopGame::with_config(card_config, action_tree)?)
 }
 
-fn calculate_pre_solve_stats(sizing: &Sizing) -> Result<PreSolveStats, Box<dyn Error>> {
-    let game = build_game(sizing)?;
-    let hero = parse_hand(HAND)?;
+fn live_hero_hands(game: &PostFlopGame) -> Result<Vec<HandCombo>, Box<dyn Error>> {
     let board = parse_board(BOARD)?;
-    let hero_made_rank = evaluate_5(&[hero.0, hero.1, board[0], board[1], board[2]]);
-    let mut blocked_value_details = Vec::new();
-    let mut blocked_fold_details = Vec::new();
+    let cards = game.private_cards(HERO_PLAYER);
+    let labels = holes_to_strings(cards)?;
+    let mut hands = Vec::new();
 
+    for (index, &(card_a, card_b)) in cards.iter().enumerate() {
+        if [card_a, card_b].iter().any(|card| board.contains(card)) {
+            continue;
+        }
+
+        hands.push(HandCombo {
+            cards: (card_a, card_b),
+            label: labels[index].clone(),
+            strategy_index: index,
+        });
+    }
+
+    Ok(hands)
+}
+
+fn calculate_all_hand_stats(
+    hands: &[HandCombo],
+    villain_cards: &[(Card, Card)],
+    equity_with_draws: &[f32],
+    board: [Card; 3],
+) -> Vec<HandStats> {
+    hands
+        .iter()
+        .map(|hand| {
+            calculate_hand_stats(
+                hand.cards,
+                villain_cards,
+                equity_with_draws[hand.strategy_index],
+                board,
+            )
+        })
+        .collect()
+}
+
+fn calculate_hand_stats(
+    hero: (Card, Card),
+    villain_cards: &[(Card, Card)],
+    equity_with_draws: f32,
+    board: [Card; 3],
+) -> HandStats {
+    let hero_made_rank = evaluate_5(&[hero.0, hero.1, board[0], board[1], board[2]]);
     let mut hero_equity_points = 0.0;
     let mut total_villain_combos = 0.0;
     let mut villain_weighted_value_combos = 0.0;
     let mut hero_blocks_value_combos = 0.0;
     let mut villain_weighted_fold_combos = 0.0;
     let mut hero_blocks_fold_combos = 0.0;
-    let mut first_fold_details = Vec::new();
 
-    for &(villain_a, villain_b) in game.private_cards(OOP_PLAYER) {
-        if !hero_blocks_combo(villain_a, villain_b, hero) {
+    for &(villain_a, villain_b) in villain_cards {
+        let blocked = hero_blocks_combo(villain_a, villain_b, hero);
+
+        if !blocked {
             let villain_made_rank =
                 evaluate_5(&[villain_a, villain_b, board[0], board[1], board[2]]);
             hero_equity_points += match hero_made_rank.cmp(&villain_made_rank) {
@@ -280,70 +356,55 @@ fn calculate_pre_solve_stats(sizing: &Sizing) -> Result<PreSolveStats, Box<dyn E
         villain_weighted_value_combos += value_weight;
         villain_weighted_fold_combos += fold_weight;
 
-        let blocker_reason = hero_blocker_reason(villain_a, villain_b, hero);
-
-        if value_weight > 0.0 && blocker_reason.is_some() {
+        if blocked {
             hero_blocks_value_combos += value_weight;
-            blocked_value_details.push(format!(
-                "{}{} equity={:.4} weight={:.1} reason={}",
-                card_to_string(villain_a),
-                card_to_string(villain_b),
-                villain_equity,
-                value_weight,
-                blocker_reason.unwrap()
-            ));
-        }
-
-        if fold_weight > 0.0 {
-            if first_fold_details.len() < 10 {
-                first_fold_details.push(format!(
-                    "{}{} equity={:.4} weight={:.1} blocked={}{}",
-                    card_to_string(villain_a),
-                    card_to_string(villain_b),
-                    villain_equity,
-                    fold_weight,
-                    blocker_reason.is_some(),
-                    blocker_reason
-                        .map(|reason| format!(" reason={reason}"))
-                        .unwrap_or_default()
-                ));
-            }
-        }
-
-        if fold_weight > 0.0 && blocker_reason.is_some() {
             hero_blocks_fold_combos += fold_weight;
-            blocked_fold_details.push(format!(
-                "{}{} equity={:.4} weight={:.1} reason={}",
-                card_to_string(villain_a),
-                card_to_string(villain_b),
-                villain_equity,
-                fold_weight,
-                blocker_reason.unwrap()
-            ));
         }
     }
 
-    print_blocker_breakdown(
-        "value",
-        villain_weighted_value_combos,
-        hero_blocks_value_combos,
-        &blocked_value_details,
-    );
-    print_blocker_breakdown(
-        "fold",
-        villain_weighted_fold_combos,
-        hero_blocks_fold_combos,
-        &blocked_fold_details,
-    );
-    print_first_fold_combo_breakdown(&first_fold_details);
-
-    Ok(PreSolveStats {
+    HandStats {
         hero_equity_vs_villain: hero_equity_points / total_villain_combos,
+        equity_with_draws,
         villain_weighted_value_combos,
         hero_blocks_value_combos,
         villain_weighted_fold_combos,
         hero_blocks_fold_combos,
-    })
+    }
+}
+
+fn row_values(solved: &SolvedSizing, hand_index: usize) -> RowValues {
+    RowValues {
+        check_freq: action_value(
+            &solved.strategy,
+            solved.check_index,
+            hand_index,
+            solved.hand_count,
+        ),
+        check_ev: ev_to_bb(action_value(
+            &solved.evs,
+            solved.check_index,
+            hand_index,
+            solved.hand_count,
+        )),
+        bet_1_freq: action_value(
+            &solved.strategy,
+            solved.bet_1_index,
+            hand_index,
+            solved.hand_count,
+        ),
+        bet_1_ev: ev_to_bb(action_value(
+            &solved.evs,
+            solved.bet_1_index,
+            hand_index,
+            solved.hand_count,
+        )),
+        allin_freq: solved.allin_index.map(|index| {
+            action_value(&solved.strategy, index, hand_index, solved.hand_count)
+        }),
+        allin_ev: solved.allin_index.map(|index| {
+            ev_to_bb(action_value(&solved.evs, index, hand_index, solved.hand_count))
+        }),
+    }
 }
 
 fn move_to_hero_root_decision(game: &mut PostFlopGame) -> Result<(), Box<dyn Error>> {
@@ -366,15 +427,6 @@ fn move_to_hero_root_decision(game: &mut PostFlopGame) -> Result<(), Box<dyn Err
     }
 
     Ok(())
-}
-
-fn find_hand_index(game: &PostFlopGame) -> Result<usize, Box<dyn Error>> {
-    let hands = holes_to_strings(game.private_cards(HERO_PLAYER))?;
-
-    hands
-        .iter()
-        .position(|hand| hand == HAND)
-        .ok_or_else(|| format!("{HAND} was not found for player {HERO_PLAYER} on {BOARD}").into())
 }
 
 fn find_action(
@@ -414,30 +466,6 @@ fn best_action(check_ev: f32, bet_1_ev: f32, allin_ev: Option<f32>) -> (&'static
     (best_name, best_ev)
 }
 
-fn print_sanity_check(sizing: &Sizing, values: &RowValues) {
-    println!(
-        "Solved {} sizing: check_ev={:.4} BB, bet_1_ev={:.4} BB, allin_ev={} BB",
-        sizing.csv_size,
-        values.check_ev,
-        values.bet_1_ev,
-        format_optional_float(values.allin_ev)
-    );
-
-    let allin_ev_failed = values
-        .allin_ev
-        .map(|ev| ev > 50.0 || ev < 0.0)
-        .unwrap_or(false);
-
-    if values.check_ev > 50.0
-        || values.bet_1_ev > 50.0
-        || values.check_ev < 0.0
-        || values.bet_1_ev < 0.0
-        || allin_ev_failed
-    {
-        eprintln!("WARNING: EV sanity check failed; EV conversion may be wrong.");
-    }
-}
-
 fn format_float(value: f32) -> String {
     format!("{value:.6}")
 }
@@ -451,7 +479,9 @@ fn heads_up_equity_with_runouts(
     opponent: (Card, Card),
     board: [Card; 3],
 ) -> f32 {
-    let dead = [player.0, player.1, opponent.0, opponent.1, board[0], board[1], board[2]];
+    let dead = [
+        player.0, player.1, opponent.0, opponent.1, board[0], board[1], board[2],
+    ];
     let deck: Vec<Card> = (0..52).filter(|card| !dead.contains(card)).collect();
     let mut points = 0.0;
     let mut total = 0.0;
@@ -530,10 +560,7 @@ fn evaluate_5(cards: &[Card; 5]) -> u32 {
     match groups.as_slice() {
         [(4, quad), (1, kicker)] => encode_rank(7, &[*quad, *kicker]),
         [(3, trips), (2, pair)] => encode_rank(6, &[*trips, *pair]),
-        _ if is_flush => {
-            let ranks: Vec<u8> = ranks_desc(&rank_counts);
-            encode_rank(5, &ranks)
-        }
+        _ if is_flush => encode_rank(5, &ranks_desc(&rank_counts)),
         _ => {
             if let Some(high) = straight_high {
                 encode_rank(4, &[high])
@@ -548,10 +575,7 @@ fn evaluate_5(cards: &[Card; 5]) -> u32 {
                     [(2, pair), (1, kicker_1), (1, kicker_2), (1, kicker_3)] => {
                         encode_rank(1, &[*pair, *kicker_1, *kicker_2, *kicker_3])
                     }
-                    _ => {
-                        let ranks: Vec<u8> = ranks_desc(&rank_counts);
-                        encode_rank(0, &ranks)
-                    }
+                    _ => encode_rank(0, &ranks_desc(&rank_counts)),
                 }
             }
         }
@@ -599,79 +623,6 @@ fn hero_blocks_combo(card_a: Card, card_b: Card, hero: (Card, Card)) -> bool {
     card_a == hero.0 || card_a == hero.1 || card_b == hero.0 || card_b == hero.1
 }
 
-fn hero_blocker_reason(card_a: Card, card_b: Card, hero: (Card, Card)) -> Option<&'static str> {
-    if card_a == hero.0 || card_b == hero.0 {
-        Some("contains Kh")
-    } else if card_a == hero.1 || card_b == hero.1 {
-        Some("contains 4h")
-    } else {
-        None
-    }
-}
-
-fn print_blocker_breakdown(
-    pool_name: &str,
-    pool_weight: f32,
-    blocked_weight: f32,
-    details: &[String],
-) {
-    println!(
-        "{} pool blocker breakdown: blocked_weight={:.1}, pool_weight={:.1}, blocked_combos={}",
-        pool_name,
-        blocked_weight,
-        pool_weight,
-        details.len()
-    );
-
-    if details.is_empty() {
-        println!("  no blocked {pool_name} combos");
-    } else {
-        for detail in details {
-            println!("  {detail}");
-        }
-    }
-}
-
-fn print_first_fold_combo_breakdown(details: &[String]) {
-    println!("first 10 weighted fold combos:");
-
-    if details.is_empty() {
-        println!("  no weighted fold combos found");
-    } else {
-        for detail in details {
-            println!("  {detail}");
-        }
-    }
-}
-
-fn card_to_string(card: Card) -> String {
-    let rank = match rank(card) {
-        0 => '2',
-        1 => '3',
-        2 => '4',
-        3 => '5',
-        4 => '6',
-        5 => '7',
-        6 => '8',
-        7 => '9',
-        8 => 'T',
-        9 => 'J',
-        10 => 'Q',
-        11 => 'K',
-        12 => 'A',
-        _ => '?',
-    };
-    let suit = match suit(card) {
-        0 => 'c',
-        1 => 'd',
-        2 => 'h',
-        3 => 's',
-        _ => '?',
-    };
-
-    format!("{rank}{suit}")
-}
-
 fn parse_board(board: &str) -> Result<[Card; 3], Box<dyn Error>> {
     if board.len() != 6 {
         return Err(format!("board must contain exactly 3 cards: {board}").into());
@@ -682,14 +633,6 @@ fn parse_board(board: &str) -> Result<[Card; 3], Box<dyn Error>> {
         parse_card(&board[2..4])?,
         parse_card(&board[4..6])?,
     ])
-}
-
-fn parse_hand(hand: &str) -> Result<(Card, Card), Box<dyn Error>> {
-    if hand.len() != 4 {
-        return Err(format!("hand must contain exactly 2 cards: {hand}").into());
-    }
-
-    Ok((parse_card(&hand[0..2])?, parse_card(&hand[2..4])?))
 }
 
 fn parse_card(card: &str) -> Result<Card, Box<dyn Error>> {
