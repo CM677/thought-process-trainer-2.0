@@ -7,6 +7,7 @@ const OUTPUT_FILE: &str = "output5.csv";
 const OOP_PLAYER: usize = 0;
 const IP_PLAYER: usize = 1;
 const BB_CHIPS: f32 = 100.0;
+const SOLVE_ITERATIONS: u32 = 500;
 
 const FLOP: &str = "Ah7s4c";
 const TURN: &str = "6s";
@@ -129,6 +130,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut flop_solves = Vec::new();
     let mut flop_branch_data = Vec::new();
+    let xx_source_solve = solve_flop_all_sizes_for_xx()?;
 
     for sizing in flop_sizings {
         println!("Running flop solve: {}", sizing.tree_size);
@@ -146,8 +148,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         "BB turn donk filtering enabled: OOP gets one 50% pot donk option before BTN's turn decision"
     );
 
-    let xx_hero = branch_hero_hands(&flop_solves[0], ModalAction::Check);
-    let xx_villain = flop_solves[0].villains.clone();
+    println!(
+        "XX branch source: dedicated flop solve with BTN sizes 33%, 75%, and 125% all available."
+    );
+    println!(
+        "XX branch uses BTN/IP modal check-back hands from that dedicated solve after BB checks flop."
+    );
+    println!(
+        "XX branch BB pre-filter range starts from the full BB live flop range, not a flop-call range."
+    );
+    let xx_hero = branch_hero_hands(&xx_source_solve, ModalAction::Check);
+    let xx_villain = xx_source_solve.villains.clone();
+    println!(
+        "XX branch before turn donk filtering: hero check-back combos={}, BB live combos={}",
+        xx_hero.len(),
+        xx_villain.len()
+    );
 
     let turn_branches = [
         ("xx", "null", 600, 9750, xx_hero, xx_villain),
@@ -235,7 +251,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn solve_flop_sizing(sizing: Sizing) -> Result<DecisionSolve, Box<dyn Error>> {
     let mut game = build_flop_game(sizing, BTN_RANGE.parse()?, BB_RANGE.parse()?)?;
     game.allocate_memory(false);
-    solve(&mut game, 500, 0.5, true);
+    solve(&mut game, SOLVE_ITERATIONS, 0.5, true);
     move_to_ip_decision(&mut game)?;
     extract_decision(
         game,
@@ -245,6 +261,25 @@ fn solve_flop_sizing(sizing: Sizing) -> Result<DecisionSolve, Box<dyn Error>> {
             turn_card: "null",
             flop_action: "null",
             flop_bet_size: sizing.csv_size,
+            turn_bet_size: "null",
+        },
+    )
+}
+
+fn solve_flop_all_sizes_for_xx() -> Result<DecisionSolve, Box<dyn Error>> {
+    println!("Running dedicated xx-source flop solve with BTN sizes 33%, 75%, 125%");
+    let mut game = build_flop_all_sizes_game(BTN_RANGE.parse()?, BB_RANGE.parse()?)?;
+    game.allocate_memory(false);
+    solve(&mut game, SOLVE_ITERATIONS, 0.5, true);
+    move_to_ip_decision(&mut game)?;
+    extract_decision(
+        game,
+        DecisionMeta {
+            street: "flop",
+            board: FLOP,
+            turn_card: "null",
+            flop_action: "xx-source",
+            flop_bet_size: "multi",
             turn_bet_size: "null",
         },
     )
@@ -267,7 +302,7 @@ fn solve_turn_sizing(
 
     let mut game = build_turn_game(sizing, pot, stack, ip_range, oop_range)?;
     game.allocate_memory(false);
-    solve(&mut game, 500, 0.5, true);
+    solve(&mut game, SOLVE_ITERATIONS, 0.5, true);
     move_to_ip_decision(&mut game)?;
     extract_decision(
         game,
@@ -298,6 +333,34 @@ fn build_flop_game(sizing: Sizing, ip_range: Range, oop_range: Range) -> Result<
         flop_bet_sizes: [
             Default::default(),
             BetSizeOptions::try_from((sizing.tree_size, ""))?,
+        ],
+        turn_bet_sizes: Default::default(),
+        river_bet_sizes: Default::default(),
+        turn_donk_sizes: None,
+        river_donk_sizes: None,
+        add_allin_threshold: 0.0,
+        force_allin_threshold: 0.0,
+        merging_threshold: 0.0,
+    };
+    Ok(PostFlopGame::with_config(card_config, ActionTree::new(tree_config)?)?)
+}
+
+fn build_flop_all_sizes_game(ip_range: Range, oop_range: Range) -> Result<PostFlopGame, Box<dyn Error>> {
+    let card_config = CardConfig {
+        range: [oop_range, ip_range],
+        flop: flop_from_str(FLOP)?,
+        turn: NOT_DEALT,
+        river: NOT_DEALT,
+    };
+    let tree_config = TreeConfig {
+        initial_state: BoardState::Flop,
+        starting_pot: STARTING_POT,
+        effective_stack: STARTING_STACK,
+        rake_rate: 0.0,
+        rake_cap: 0.0,
+        flop_bet_sizes: [
+            Default::default(),
+            BetSizeOptions::try_from(("33%, 75%, 125%", ""))?,
         ],
         turn_bet_sizes: Default::default(),
         river_bet_sizes: Default::default(),
@@ -399,7 +462,7 @@ fn filter_bb_turn_checks(
     let oop_range = range_from_hands(&villain_live)?;
     let mut game = build_turn_donk_filter_game(pot, stack, ip_range, oop_range)?;
     game.allocate_memory(false);
-    solve(&mut game, 500, 0.5, true);
+    solve(&mut game, SOLVE_ITERATIONS, 0.5, true);
     game.back_to_root();
     game.cache_normalized_weights();
 
@@ -413,8 +476,12 @@ fn filter_bb_turn_checks(
 
     let actions = game.available_actions();
     println!("Turn branch {flop_action}: BB donk actions available: {actions:?}");
-    let bet_available = actions.iter().any(|action| matches!(action, Action::Bet(_)));
-    if !bet_available {
+    let check_index = actions.iter().position(|action| matches!(action, Action::Check));
+    let bet_index = actions.iter().position(|action| matches!(action, Action::Bet(_)));
+    println!(
+        "Turn branch {flop_action}: check_index={check_index:?}, bet_index={bet_index:?}"
+    );
+    if check_index.is_none() || bet_index.is_none() {
         println!(
             "Turn branch {flop_action}: no BB donk bet action found; keeping all {} combos",
             villain_live.len()
@@ -427,16 +494,69 @@ fn filter_bb_turn_checks(
     let villains = player_hands(&game, OOP_PLAYER)?;
     let mut kept = Vec::new();
     let mut removed = Vec::new();
+    let mut check_sum = 0.0;
+    let mut bet_sum = 0.0;
+    let mut check_gt_70 = 0;
+    let mut check_50_70 = 0;
+    let mut check_30_50 = 0;
+    let mut check_lt_30 = 0;
+    let mut removed_examples = Vec::new();
+    let check_index = check_index.expect("checked above");
+    let bet_index = bet_index.expect("checked above");
 
     for villain in villains {
+        let check_freq = action_value(&strategy, check_index, villain.index, hand_count);
+        let bet_freq = action_value(&strategy, bet_index, villain.index, hand_count);
+        check_sum += check_freq;
+        bet_sum += bet_freq;
+        if check_freq > 0.70 {
+            check_gt_70 += 1;
+        } else if check_freq >= 0.50 {
+            check_50_70 += 1;
+        } else if check_freq >= 0.30 {
+            check_30_50 += 1;
+        } else {
+            check_lt_30 += 1;
+        }
+
         match modal_action_for_hand(&actions, &strategy, villain.index, hand_count) {
             ModalAction::Check => kept.push(villain),
-            ModalAction::Bet => removed.push(villain),
+            ModalAction::Bet => {
+                if removed_examples.len() < 8 {
+                    removed_examples.push(format!(
+                        "{} check={:.3} donk={:.3}",
+                        villain.label, check_freq, bet_freq
+                    ));
+                }
+                removed.push(villain);
+            }
             _ => kept.push(villain),
         }
     }
 
     println!("Turn branch {flop_action}: BB combos before filter = {}", hand_count);
+    println!(
+        "Turn branch {flop_action}: avg check freq = {:.4}",
+        check_sum / hand_count as f32
+    );
+    println!(
+        "Turn branch {flop_action}: avg donk freq = {:.4}",
+        bet_sum / hand_count as f32
+    );
+    if flop_action == "xx" {
+        println!("XX branch BB turn filtering:");
+        println!("total combos before = {}", hand_count);
+        println!("avg check freq = {:.4}", check_sum / hand_count as f32);
+        println!("avg donk freq = {:.4}", bet_sum / hand_count as f32);
+        println!("check > 70% combos = {check_gt_70}");
+        println!("check 50-70% combos (including 50%) = {check_50_70}");
+        println!("check 30-50% combos = {check_30_50}");
+        println!("check < 30% combos = {check_lt_30}");
+    }
+    println!("Turn branch {flop_action}: check > 70% combos = {check_gt_70}");
+    println!("Turn branch {flop_action}: check 50-70% combos (including 50%) = {check_50_70}");
+    println!("Turn branch {flop_action}: check 30-50% combos = {check_30_50}");
+    println!("Turn branch {flop_action}: check < 30% combos = {check_lt_30}");
     println!(
         "Turn branch {flop_action}: modal donk removed = {}",
         removed.len()
@@ -445,8 +565,7 @@ fn filter_bb_turn_checks(
         "Turn branch {flop_action}: modal check kept = {}",
         kept.len()
     );
-    let examples: Vec<String> = removed.iter().take(5).map(|hand| hand.label.clone()).collect();
-    println!("Turn branch {flop_action}: example removed donks = {examples:?}");
+    println!("Turn branch {flop_action}: sample removed donks = {removed_examples:?}");
 
     Ok(kept)
 }
@@ -530,7 +649,7 @@ struct FlopBranchData {
 }
 
 fn solve_game_for_inspection(game: &mut PostFlopGame) {
-    let _ = solve(game, 500, 0.5, true);
+    let _ = solve(game, SOLVE_ITERATIONS, 0.5, true);
 }
 
 fn export_decision_rows(writer: &mut csv::Writer<std::fs::File>, solve: &DecisionSolve) -> Result<usize, Box<dyn Error>> {
