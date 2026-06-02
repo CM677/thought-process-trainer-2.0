@@ -235,7 +235,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn solve_flop_sizing(sizing: Sizing) -> Result<DecisionSolve, Box<dyn Error>> {
     let mut game = build_flop_game(sizing, BTN_RANGE.parse()?, BB_RANGE.parse()?)?;
     game.allocate_memory(false);
-    solve(&mut game, 50, 0.5, true);
+    solve(&mut game, 500, 0.5, true);
     move_to_ip_decision(&mut game)?;
     extract_decision(
         game,
@@ -267,7 +267,7 @@ fn solve_turn_sizing(
 
     let mut game = build_turn_game(sizing, pot, stack, ip_range, oop_range)?;
     game.allocate_memory(false);
-    solve(&mut game, 50, 0.5, true);
+    solve(&mut game, 500, 0.5, true);
     move_to_ip_decision(&mut game)?;
     extract_decision(
         game,
@@ -399,7 +399,7 @@ fn filter_bb_turn_checks(
     let oop_range = range_from_hands(&villain_live)?;
     let mut game = build_turn_donk_filter_game(pot, stack, ip_range, oop_range)?;
     game.allocate_memory(false);
-    solve(&mut game, 50, 0.5, true);
+    solve(&mut game, 500, 0.5, true);
     game.back_to_root();
     game.cache_normalized_weights();
 
@@ -530,7 +530,7 @@ struct FlopBranchData {
 }
 
 fn solve_game_for_inspection(game: &mut PostFlopGame) {
-    let _ = solve(game, 50, 0.5, true);
+    let _ = solve(game, 500, 0.5, true);
 }
 
 fn export_decision_rows(writer: &mut csv::Writer<std::fs::File>, solve: &DecisionSolve) -> Result<usize, Box<dyn Error>> {
