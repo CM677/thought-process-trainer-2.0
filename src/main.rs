@@ -475,6 +475,7 @@ fn filter_bb_turn_checks(
     }
 
     let actions = game.available_actions();
+    println!("Turn branch {flop_action}: BB root actions = {actions:?}");
     println!("Turn branch {flop_action}: BB donk actions available: {actions:?}");
     let check_index = actions.iter().position(|action| matches!(action, Action::Check));
     let bet_index = actions.iter().position(|action| matches!(action, Action::Bet(_)));
@@ -488,6 +489,14 @@ fn filter_bb_turn_checks(
         );
         return Ok(villain_live);
     }
+
+    // BetSizeOptions::try_from((bet_sizes, raise_sizes)): the first string is the
+    // acting player's bet sizes; the second string is the opponent's raise sizes
+    // after facing that bet. In this diagnostic donk-filter tree OOP uses
+    // ("50%", ""), so BTN may have no raise sizes versus BB's donk.
+    log_btn_response_to_donk(&mut game, flop_action, bet_index.expect("checked above"))?;
+    game.back_to_root();
+    game.cache_normalized_weights();
 
     let strategy = game.strategy().to_vec();
     let hand_count = game.private_cards(OOP_PLAYER).len();
@@ -568,6 +577,33 @@ fn filter_bb_turn_checks(
     println!("Turn branch {flop_action}: sample removed donks = {removed_examples:?}");
 
     Ok(kept)
+}
+
+fn log_btn_response_to_donk(
+    game: &mut PostFlopGame,
+    flop_action: &'static str,
+    bet_index: usize,
+) -> Result<(), Box<dyn Error>> {
+    game.play(bet_index);
+    println!(
+        "Turn branch {flop_action}: after BB donk, current_player = {}",
+        game.current_player()
+    );
+    let response_actions = game.available_actions();
+    println!(
+        "Turn branch {flop_action}: BTN response actions vs donk = {response_actions:?}"
+    );
+    let raise_available = response_actions
+        .iter()
+        .any(|action| matches!(action, Action::Raise(_)));
+    println!("Turn branch {flop_action}: BTN raise vs donk available = {raise_available}");
+    if !raise_available {
+        println!(
+            "Turn branch {flop_action}: BTN cannot raise versus BB turn donk in the current donk-filter tree. This may make BB donk frequencies too high."
+        );
+    }
+
+    Ok(())
 }
 
 fn extract_decision(mut game: PostFlopGame, meta: DecisionMeta) -> Result<DecisionSolve, Box<dyn Error>> {
