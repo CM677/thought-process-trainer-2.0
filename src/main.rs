@@ -427,9 +427,10 @@ fn build_turn_donk_filter_game(
         rake_cap: 0.0,
         flop_bet_sizes: Default::default(),
         turn_bet_sizes: [
-            // OOP donks 50%; BTN can raise 3x versus that donk in this filter solve.
-            BetSizeOptions::try_from(("50%", "3x"))?,
-            BetSizeOptions::try_from(("50%, 100%", ""))?,
+            BetSizeOptions::try_from(("50%", ""))?,
+            // DONK_FILTER_BTN_CAN_RAISE
+            // IP/BTN can raise 3x after facing OOP/BB's 50% turn donk in this filter solve.
+            BetSizeOptions::try_from(("50%, 100%", "3x"))?,
         ],
         river_bet_sizes: Default::default(),
         turn_donk_sizes: None,
