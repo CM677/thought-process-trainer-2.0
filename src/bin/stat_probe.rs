@@ -38,6 +38,7 @@ const POSTFLOP_SIZINGS: [PostflopSizing; 3] = [
     },
 ];
 
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 struct PostflopSizing {
     label: &'static str,
@@ -46,6 +47,7 @@ struct PostflopSizing {
     tree_size: &'static str,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 struct SpotSizeConfig {
     spot_type: &'static str,
@@ -104,6 +106,42 @@ struct RowValues {
     ev: f32,
 }
 
+#[derive(Clone, Copy)]
+struct PostflopPotConfig {
+    starting_pot_bb: f64,
+    effective_stack_bb: f64,
+}
+
+#[derive(Default)]
+struct SkipSummary {
+    invalid_board: usize,
+    unsupported_4bp: usize,
+    no_range_pair: usize,
+    hand_not_in_range: usize,
+    no_config: usize,
+    invalid_hand: usize,
+    blank_hand: usize,
+    solve_failed: usize,
+    duplicate_rows: usize,
+}
+
+impl SkipSummary {
+    fn print(&self) {
+        println!(
+            "Skipped summary: invalid board={}, unsupported 4bp={}, no range pair={}, hand not in range={}, no config={}, invalid hand={}, blank hand={}, solve failed={}, duplicate rows={}",
+            self.invalid_board,
+            self.unsupported_4bp,
+            self.no_range_pair,
+            self.hand_not_in_range,
+            self.no_config,
+            self.invalid_hand,
+            self.blank_hand,
+            self.solve_failed,
+            self.duplicate_rows,
+        );
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let input_rows = load_input_rows()?;
     let mut writer = csv::Writer::from_path(OUTPUT_FILE)?;
@@ -111,49 +149,21 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut rows_written = 0usize;
     let mut seen = HashSet::new();
+    let mut skipped = SkipSummary::default();
 
     for (row_index, input) in input_rows.iter().enumerate() {
-        println!(
-            "Running stat probe row {}/{}\nRunning spot {}: {} {} vs {} hand={} board={}",
-            row_index + 1,
-            input_rows.len(),
-            input.spot_id,
-            input.spot_type,
-            input.hero_position,
-            input.villain_position.as_deref().unwrap_or(""),
-            input.hand.as_deref().unwrap_or("ALL"),
-            input.board
-        );
-
-        let Some(config) = find_spot_config(input) else {
-            eprintln!(
-                "Skipping spot {}: no spot size config for spot_type={} hero={} villain={}",
-                input.spot_id,
-                input.spot_type,
-                input.hero_position,
-                input.villain_position.as_deref().unwrap_or("")
-            );
-            continue;
-        };
-
-        let Some(range_pair) = lookup_ranges(input) else {
-            eprintln!(
-                "Skipping spot {}: no real range pair available for spot_type={} hero={} villain={}",
-                input.spot_id,
-                input.spot_type,
-                input.hero_position,
-                input.villain_position.as_deref().unwrap_or("")
-            );
-            continue;
-        };
+        println!("Running stat probe row {}/{}", row_index + 1, input_rows.len());
 
         let board = match parse_board(&input.board) {
             Ok(board) => board,
             Err(error) => {
                 eprintln!("Skipping spot {}: invalid board {}: {error}", input.spot_id, input.board);
+                skipped.invalid_board += 1;
                 continue;
             }
         };
+        let flop_board = board_to_string(&board);
+
         if let Some(hand) = input.hand.as_deref() {
             match parse_hand(hand) {
                 Ok(cards) => {
@@ -162,24 +172,68 @@ fn main() -> Result<(), Box<dyn Error>> {
                             "Skipping spot {}: hand {} contains a board card on {}",
                             input.spot_id, hand, input.board
                         );
+                        skipped.hand_not_in_range += 1;
                         continue;
                     }
                 }
                 Err(error) => {
                     eprintln!("Skipping spot {}: invalid hand {}: {error}", input.spot_id, hand);
+                    skipped.invalid_hand += 1;
                     continue;
                 }
             }
         } else {
             eprintln!("Skipping spot {}: blank Hand is not expanded in this patch", input.spot_id);
+            skipped.blank_hand += 1;
             continue;
         }
 
+        println!(
+            "Running spot {}: {} {} vs {} hand={} full_board={} flop={}",
+            input.spot_id,
+            input.spot_type,
+            input.hero_position,
+            input.villain_position.as_deref().unwrap_or(""),
+            input.hand.as_deref().unwrap_or("ALL"),
+            input.board,
+            flop_board
+        );
+
+        if input.spot_type == "4bp" {
+            eprintln!("Skipping spot {}: 4bp not implemented yet", input.spot_id);
+            skipped.unsupported_4bp += 1;
+            continue;
+        }
+
+        let Some(pot_config) = postflop_pot_config(input) else {
+            eprintln!(
+                "Skipping spot {}: no postflop pot config for pot_type={} hero={} villain={}",
+                input.spot_id,
+                input.spot_type,
+                input.hero_position,
+                input.villain_position.as_deref().unwrap_or("")
+            );
+            skipped.no_config += 1;
+            continue;
+        };
+
+        let Some(range_pair) = lookup_ranges(input) else {
+            eprintln!(
+                "Skipping spot {}: no range pair available for pot_type={} hero={} villain={}",
+                input.spot_id,
+                input.spot_type,
+                input.hero_position,
+                input.villain_position.as_deref().unwrap_or("")
+            );
+            skipped.no_range_pair += 1;
+            continue;
+        };
+
         let hero_is_ip = is_in_position(&input.hero_position, input.villain_position.as_deref());
         let hero_player = if hero_is_ip { IP_PLAYER } else { OOP_PLAYER };
-        let starting_pot_bb = config.pot_before_bb + 2.0 * config.bet_size_bb;
+        let starting_pot_bb = pot_config.starting_pot_bb;
         let starting_pot = bb_to_chips(starting_pot_bb);
-        let effective_stack = bb_to_chips(STARTING_STACK_BB - config.bet_size_bb);
+        let effective_stack = bb_to_chips(pot_config.effective_stack_bb);
 
         for sizing in POSTFLOP_SIZINGS {
             println!("Running sizing {}", sizing.label);
@@ -204,6 +258,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         input.villain_position.as_deref().unwrap_or(""),
                         input.board
                     );
+                    skipped.solve_failed += 1;
                     continue;
                 }
             };
@@ -216,6 +271,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             "Skipping spot {}: hand {} is not legal/in-range on board {}",
                             input.spot_id, hand, input.board
                         );
+                        skipped.hand_not_in_range += 1;
                         continue;
                     };
                     vec![combo.clone()]
@@ -225,15 +281,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             for hand in target_hand {
                 let key = format!(
-                    "{}|{}|{}|{}|{}|{}",
+                    "{}|{}|{}|{}|{}|{}|{}",
+                    input.spot_id,
                     input.spot_type,
                     input.hero_position,
                     input.villain_position.as_deref().unwrap_or(""),
-                    input.board,
+                    flop_board,
                     hand.label,
                     sizing.label
                 );
                 if !seen.insert(key) {
+                    skipped.duplicate_rows += 1;
                     continue;
                 }
 
@@ -250,11 +308,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     input.spot_type.clone(),
                     input.hero_position.clone(),
                     input.villain_position.clone().unwrap_or_default(),
-                    input.board.clone(),
+                    flop_board.clone(),
                     hand.label,
                     sizing.label.to_string(),
                     format_f64(starting_pot_bb * sizing.pct),
-                    format_f64(config.pot_before_bb),
+                    format_f64(starting_pot_bb),
                     format_float(values.check_freq),
                     format_float(values.bet_freq),
                     format_float(values.check_ev),
@@ -287,6 +345,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     writer.flush()?;
     println!("Done. Written {rows_written} rows to {OUTPUT_FILE}");
+    skipped.print();
     Ok(())
 }
 
@@ -537,33 +596,54 @@ fn lookup_ranges(input: &ProbeSpot) -> Option<RangePair> {
             hero_range: BB_VS_BTN_RANGE,
             villain_range: BTN_OPEN_RANGE,
         }),
+        ("srp", hero, villain) => {
+            let villain = villain.unwrap_or("");
+            warn_range_fallback("SRP", hero, villain);
+            Some(fallback_ranges_for_positions(hero, villain))
+        }
+        ("3bp", hero, villain) => {
+            let villain = villain.unwrap_or("");
+            warn_range_fallback("3BP", hero, villain);
+            Some(fallback_ranges_for_positions(hero, villain))
+        }
+        ("4bp", _, _) => None,
         _ => None,
     }
 }
 
-fn find_spot_config(input: &ProbeSpot) -> Option<&'static SpotSizeConfig> {
-    if input.spot_type == "4bp" {
-        eprintln!("Skipping spot {}: pot type 4bp not implemented yet", input.spot_id);
-        return None;
-    }
+fn warn_range_fallback(pot_type: &str, hero: &str, villain: &str) {
+    eprintln!(
+        "WARNING: using closest available {pot_type} fallback range for {hero} vs {villain}"
+    );
+}
 
-    let legacy_spot_type = match input.spot_type.as_str() {
-        "srp" if input.hero_position == "BB" => "vs_open",
-        "srp" => "rfi",
-        "3bp" => "vs_3bet",
-        other => other,
-    };
-    let legacy_villain = if legacy_spot_type == "rfi" {
-        None
+fn fallback_ranges_for_positions(hero: &str, villain: &str) -> RangePair {
+    if hero == "BB" || postflop_position_order(hero) < postflop_position_order(villain) {
+        RangePair {
+            hero_range: BB_VS_BTN_RANGE,
+            villain_range: BTN_OPEN_RANGE,
+        }
     } else {
-        input.villain_position.as_deref()
-    };
+        RangePair {
+            hero_range: BTN_OPEN_RANGE,
+            villain_range: BB_VS_BTN_RANGE,
+        }
+    }
+}
 
-    SPOT_SIZE_CONFIGS.iter().find(|config| {
-        config.spot_type == legacy_spot_type
-            && config.hero_position == input.hero_position
-            && config.villain_position == legacy_villain
-    })
+fn postflop_pot_config(input: &ProbeSpot) -> Option<PostflopPotConfig> {
+    match input.spot_type.as_str() {
+        "srp" => Some(PostflopPotConfig {
+            starting_pot_bb: 5.5,
+            effective_stack_bb: STARTING_STACK_BB,
+        }),
+        "3bp" => Some(PostflopPotConfig {
+            starting_pot_bb: 18.0,
+            effective_stack_bb: STARTING_STACK_BB,
+        }),
+        "4bp" => None,
+        _ => None,
+    }
 }
 
 fn solve_spot(
@@ -1052,19 +1132,30 @@ fn hero_blocks_combo(card_a: Card, card_b: Card, hero: (Card, Card)) -> bool {
 }
 
 fn parse_board(board: &str) -> Result<[Card; 3], Box<dyn Error>> {
-    let board = board.trim();
-    if board.len() != 6 {
-        return Err(format!("board must contain exactly 3 cards: {board}").into());
+    let board = board
+        .trim()
+        .chars()
+        .filter(|card| !card.is_whitespace() && *card != ',' && *card != '-')
+        .collect::<String>();
+    if board.len() < 6 || board.len() % 2 != 0 {
+        return Err(format!("board must contain at least 3 cards: {board}").into());
     }
-    let cards = [
-        parse_card(&board[0..2])?,
-        parse_card(&board[2..4])?,
-        parse_card(&board[4..6])?,
-    ];
+    let mut all_cards = Vec::new();
+    for index in (0..board.len()).step_by(2) {
+        all_cards.push(parse_card(&board[index..index + 2])?);
+    }
+    if all_cards.len() < 3 {
+        return Err(format!("board must contain at least 3 cards: {board}").into());
+    }
+    let cards = [all_cards[0], all_cards[1], all_cards[2]];
     if cards[0] == cards[1] || cards[0] == cards[2] || cards[1] == cards[2] {
-        return Err(format!("board contains duplicate cards: {board}").into());
+        return Err(format!("first 3 board cards contain duplicates: {board}").into());
     }
     Ok(cards)
+}
+
+fn board_to_string(board: &[Card; 3]) -> String {
+    board.iter().map(|&card| card_to_string(card)).collect::<Vec<_>>().join("")
 }
 
 fn parse_hand(hand: &str) -> Result<(Card, Card), Box<dyn Error>> {
@@ -1152,6 +1243,7 @@ fn holes_to_strings(cards: &[(Card, Card)]) -> Vec<String> {
         .collect()
 }
 
+#[allow(dead_code)]
 static SPOT_SIZE_CONFIGS: &[SpotSizeConfig] = &[
     SpotSizeConfig { spot_type: "rfi", hero_position: "UTG", villain_position: None, bet_size_bb: 2.5, pot_before_bb: 1.5 },
     SpotSizeConfig { spot_type: "rfi", hero_position: "HJ", villain_position: None, bet_size_bb: 2.5, pot_before_bb: 1.5 },
