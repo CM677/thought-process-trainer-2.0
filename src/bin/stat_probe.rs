@@ -672,7 +672,9 @@ fn solve_spot(
         effective_stack,
     )?;
     game.allocate_memory(false);
-    solve(&mut game, SOLVE_ITERATIONS, 0.5, true);
+    // Keep postflop-solver's internal exploitability/progress logging off here:
+    // that path can touch normalized_weights before the cache exists.
+    solve(&mut game, SOLVE_ITERATIONS, 0.5, false);
     move_to_hero_decision(&mut game, hero_player)?;
 
     let actions = game.available_actions();
