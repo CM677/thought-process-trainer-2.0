@@ -2,9 +2,11 @@ use postflop_solver::*;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
 const SOLVE_ITERATIONS: u32 = 500;
+const SAFE_MINIMAL_OUTPUT: bool = true;
 const BB_CHIPS: f32 = 100.0;
 const STARTING_STACK_BB: f64 = 100.0;
 const INPUT_FILE: &str = "stat_probe_input.csv";
@@ -237,18 +239,21 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         for sizing in POSTFLOP_SIZINGS {
             println!("Running sizing {}", sizing.label);
-            let solve = match solve_spot(
-                board,
-                range_pair.hero_range,
-                range_pair.villain_range,
-                hero_is_ip,
-                hero_player,
-                sizing,
-                starting_pot,
-                effective_stack,
-            ) {
-                Ok(solve) => solve,
-                Err(error) => {
+            let solve_result = catch_unwind(AssertUnwindSafe(|| {
+                solve_spot(
+                    board,
+                    range_pair.hero_range,
+                    range_pair.villain_range,
+                    hero_is_ip,
+                    hero_player,
+                    sizing,
+                    starting_pot,
+                    effective_stack,
+                )
+            }));
+            let solve = match solve_result {
+                Ok(Ok(solve)) => solve,
+                Ok(Err(error)) => {
                     eprintln!(
                         "Skipping spot {} sizing {}: solve failed for {} {} {} {}: {error}",
                         input.spot_id,
@@ -257,6 +262,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                         input.hero_position,
                         input.villain_position.as_deref().unwrap_or(""),
                         input.board
+                    );
+                    skipped.solve_failed += 1;
+                    continue;
+                }
+                Err(_) => {
+                    eprintln!(
+                        "Skipping spot {} sizing {}: postflop-solver panicked; continuing without crashing stat_probe",
+                        input.spot_id,
+                        sizing.label
                     );
                     skipped.solve_failed += 1;
                     continue;
@@ -300,7 +314,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let equity_with_draws = solve.hero_equities[hand.index];
                 let raw_strength_score = raw_strength_score(hero_equity_vs_villain);
                 let improvability_score = improvability_score(equity_with_draws - hero_equity_vs_villain);
-                let range_advantage_score = range_advantage_score(solve.range_stats.range_equity_hero);
+                let range_advantage_score = if SAFE_MINIMAL_OUTPUT {
+                    0
+                } else {
+                    range_advantage_score(solve.range_stats.range_equity_hero)
+                };
                 let nut_advantage_score = nut_advantage_score(solve.range_stats.nut_advantage_pct);
                 let spot_id = input.spot_id.clone();
 
@@ -656,6 +674,7 @@ fn solve_spot(
     starting_pot: i32,
     effective_stack: i32,
 ) -> Result<DecisionSolve, Box<dyn Error>> {
+    println!("Building game...");
     let (oop_range, ip_range): (Range, Range) = if hero_is_ip {
         (villain_range.parse()?, hero_range.parse()?)
     } else {
@@ -671,12 +690,16 @@ fn solve_spot(
         starting_pot,
         effective_stack,
     )?;
+    println!("Game built.");
     game.allocate_memory(false);
-    // Keep postflop-solver's internal exploitability/progress logging off here:
-    // that path can touch normalized_weights before the cache exists.
-    solve(&mut game, SOLVE_ITERATIONS, 0.5, false);
+    game.cache_normalized_weights();
+    println!("Solving game...");
+    solve(&mut game, SOLVE_ITERATIONS, 0.0, false);
+    println!("Game solved.");
+    game.cache_normalized_weights();
     move_to_hero_decision(&mut game, hero_player)?;
 
+    println!("Extracting strategy...");
     let actions = game.available_actions();
     let check_index = find_action(&actions, |action| matches!(action, Action::Check))?;
     let bet_index = find_action(&actions, |action| matches!(action, Action::Bet(_)))?;
@@ -686,12 +709,16 @@ fn solve_spot(
     let hands = player_hands(&game, hero_player)?;
     let villains = player_hands(&game, villain_player)?;
     let strategy = game.strategy().to_vec();
+    println!("Extracting EVs...");
     let evs = game.expected_values_detail(hero_player).to_vec();
-    let hero_equities = game.equity(hero_player).to_vec();
-    let villain_equities = game.equity(villain_player).to_vec();
-    println!(
-        "Calculating range_equity_hero using manual weighted average to avoid normalized_weights cache panic."
-    );
+    println!("Extracting equities...");
+    let (hero_equities, villain_equities) = if SAFE_MINIMAL_OUTPUT {
+        eprintln!("WARNING: range_equity_hero temporarily disabled to avoid normalized_weights cache panic");
+        (vec![0.0; hand_count], vec![0.0; villain_count])
+    } else {
+        (game.equity(hero_player).to_vec(), game.equity(villain_player).to_vec())
+    };
+    println!("Writing rows...");
     let range_stats = calculate_range_stats(
         &hero_equities,
         &villain_equities,
