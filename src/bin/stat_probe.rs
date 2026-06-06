@@ -687,11 +687,12 @@ fn solve_spot(
     let evs = game.expected_values_detail(hero_player).to_vec();
     let hero_equities = game.equity(hero_player).to_vec();
     let villain_equities = game.equity(villain_player).to_vec();
-    let hero_weights = game.normalized_weights(hero_player).to_vec();
+    println!(
+        "Calculating range_equity_hero using manual weighted average to avoid normalized_weights cache panic."
+    );
     let range_stats = calculate_range_stats(
         &hero_equities,
         &villain_equities,
-        &hero_weights,
         hand_count,
         villain_count,
     );
@@ -802,7 +803,6 @@ fn player_hands(game: &PostFlopGame, player: usize) -> Result<Vec<HandCombo>, Bo
 fn calculate_range_stats(
     hero_equities: &[f32],
     villain_equities: &[f32],
-    hero_weights: &[f32],
     hero_count: usize,
     villain_count: usize,
 ) -> RangeStats {
@@ -812,14 +812,7 @@ fn calculate_range_stats(
     let villain_total_live_combos = villain_count as f32;
     let hero_weighted_value_pct = safe_div(hero_weighted_value_combos, hero_total_live_combos);
     let villain_weighted_value_pct = safe_div(villain_weighted_value_combos, villain_total_live_combos);
-    let (weighted_equity_sum, weight_sum) = hero_equities
-        .iter()
-        .take(hero_count)
-        .zip(hero_weights.iter().take(hero_count))
-        .fold((0.0, 0.0), |(eq_sum, w_sum), (&equity, &weight)| {
-            (eq_sum + equity * weight, w_sum + weight)
-        });
-    let range_equity_hero = safe_div(weighted_equity_sum, weight_sum);
+    let range_equity_hero = weighted_average_equity_without_normalized_cache(hero_equities, None, hero_count);
 
     RangeStats {
         hero_weighted_value_combos,
@@ -831,6 +824,44 @@ fn calculate_range_stats(
         nut_advantage_pct: hero_weighted_value_pct - villain_weighted_value_pct,
         range_equity_hero,
     }
+}
+
+fn weighted_average_equity_without_normalized_cache(
+    equities: &[f32],
+    weights: Option<&[f32]>,
+    combo_count: usize,
+) -> f32 {
+    if equities.len() < combo_count {
+        eprintln!(
+            "WARNING: only {} equity entries available for {combo_count} hero combos; using available entries.",
+            equities.len()
+        );
+    }
+
+    let mut numerator = 0.0;
+    let mut denominator = 0.0;
+    let usable_count = equities.len().min(combo_count);
+
+    for index in 0..usable_count {
+        let equity = equities[index];
+        if !equity.is_finite() {
+            eprintln!("WARNING: skipping non-finite hero equity at index {index}: {equity}");
+            continue;
+        }
+
+        let weight = weights.and_then(|values| values.get(index).copied()).unwrap_or(1.0);
+        if weight.is_finite() && weight > 0.0 {
+            numerator += equity * weight;
+            denominator += weight;
+        }
+    }
+
+    if denominator <= 0.0 {
+        eprintln!("WARNING: no positive hero combo weights available for range_equity_hero; using 0.0");
+        return 0.0;
+    }
+
+    numerator / denominator
 }
 
 fn raw_equity_vs_villain(hero: (Card, Card), villains: &[HandCombo], board: &[Card; 3]) -> f32 {
