@@ -7,6 +7,7 @@ use std::path::Path;
 
 const SOLVE_ITERATIONS: u32 = 500;
 const SAFE_MINIMAL_OUTPUT: bool = true;
+const MAX_INPUT_ROWS_TO_PROCESS: Option<usize> = Some(10);
 const BB_CHIPS: f32 = 100.0;
 const STARTING_STACK_BB: f64 = 100.0;
 const INPUT_FILE: &str = "stat_probe_input.csv";
@@ -147,6 +148,18 @@ impl SkipSummary {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let input_rows = load_input_rows()?;
+    let rows_to_process = match MAX_INPUT_ROWS_TO_PROCESS {
+        Some(limit) => {
+            println!("MAX_INPUT_ROWS_TO_PROCESS = {limit}");
+            println!("Processing first {limit} input rows only for testing.");
+            input_rows.len().min(limit)
+        }
+        None => {
+            println!("MAX_INPUT_ROWS_TO_PROCESS = None");
+            println!("Processing all {} input rows.", input_rows.len());
+            input_rows.len()
+        }
+    };
     let mut writer = csv::Writer::from_path(OUTPUT_FILE)?;
     write_header(&mut writer)?;
 
@@ -154,8 +167,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut seen = HashSet::new();
     let mut skipped = SkipSummary::default();
 
-    for (row_index, input) in input_rows.iter().enumerate() {
-        println!("Running stat probe row {}/{}", row_index + 1, input_rows.len());
+    for (row_index, input) in input_rows.iter().take(rows_to_process).enumerate() {
+        println!("Running stat probe row {}/{}", row_index + 1, rows_to_process);
 
         let board = match parse_board(&input.board) {
             Ok(board) => board,
