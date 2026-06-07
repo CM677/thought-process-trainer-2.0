@@ -81,6 +81,7 @@ struct DecisionSolve {
     villains: Vec<HandCombo>,
     strategy: Vec<f32>,
     evs: Vec<f32>,
+    evs_available: bool,
     hero_equities: Vec<f32>,
     check_index: usize,
     bet_index: usize,
@@ -710,7 +711,12 @@ fn solve_spot(
     let villains = player_hands(&game, villain_player)?;
     let strategy = game.strategy().to_vec();
     println!("Extracting EVs...");
-    let evs = game.expected_values_detail(hero_player).to_vec();
+    eprintln!(
+        "WARNING: expected_values_detail disabled in stat_probe to avoid normalized_weights cache panic; using frequency-based best_action."
+    );
+    let action_count = actions.len();
+    let evs = vec![0.0; action_count * hand_count];
+    let evs_available = false;
     println!("Extracting equities...");
     let (hero_equities, villain_equities) = if SAFE_MINIMAL_OUTPUT {
         eprintln!("WARNING: range_equity_hero temporarily disabled to avoid normalized_weights cache panic");
@@ -731,6 +737,7 @@ fn solve_spot(
         villains,
         strategy,
         evs,
+        evs_available,
         hero_equities,
         check_index,
         bet_index,
@@ -796,13 +803,27 @@ fn move_to_hero_decision(game: &mut PostFlopGame, hero_player: usize) -> Result<
 
 fn row_values(solve: &DecisionSolve, hand_index: usize) -> RowValues {
     let check_freq = action_value(&solve.strategy, solve.check_index, hand_index, solve.hand_count);
-    let check_ev = ev_to_bb(action_value(&solve.evs, solve.check_index, hand_index, solve.hand_count));
     let bet_freq = action_value(&solve.strategy, solve.bet_index, hand_index, solve.hand_count);
-    let bet_ev = ev_to_bb(action_value(&solve.evs, solve.bet_index, hand_index, solve.hand_count));
-    let (best_action, ev) = if bet_ev > check_ev {
-        ("bet", bet_ev)
+    let check_ev = if solve.evs_available {
+        ev_to_bb(action_value(&solve.evs, solve.check_index, hand_index, solve.hand_count))
     } else {
-        ("check", check_ev)
+        0.0
+    };
+    let bet_ev = if solve.evs_available {
+        ev_to_bb(action_value(&solve.evs, solve.bet_index, hand_index, solve.hand_count))
+    } else {
+        0.0
+    };
+    let (best_action, ev) = if solve.evs_available {
+        if bet_ev > check_ev {
+            ("bet", bet_ev)
+        } else {
+            ("check", check_ev)
+        }
+    } else if bet_freq > check_freq {
+        ("bet", 0.0)
+    } else {
+        ("check", 0.0)
     };
 
     RowValues {
