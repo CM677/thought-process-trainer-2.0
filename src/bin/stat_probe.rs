@@ -161,7 +161,7 @@ impl SkipSummary {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let input_rows = load_input_rows()?;
-    println!("Input interpretation: Position 1 = IP / hero, Position 2 = OOP / villain.");
+    println!("Input interpretation: Position 1 = Hero, Position 2 = Villain. IP/OOP is inferred from normal position logic.");
     let rows_to_process = match MAX_INPUT_ROWS_TO_PROCESS {
         Some(limit) => {
             println!("MAX_INPUT_ROWS_TO_PROCESS = {limit}");
@@ -193,6 +193,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         };
         let flop_board = board_to_string(&board);
+        let position_context = determine_ip_oop(
+            input.hero_position.as_str(),
+            input.villain_position.as_deref().unwrap_or(""),
+        );
 
         if let Some(hand) = input.hand.as_deref() {
             match parse_hand(hand) {
@@ -219,11 +223,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         println!(
-            "Running spot {}: {} IP={} OOP={} hand={} full_board={} flop={}",
+            "Running spot {}: {} hero={} villain={} hero_is_ip={} ip={} oop={} hand={} full_board={} flop={}",
             input.spot_id,
             input.spot_type,
             input.hero_position,
             input.villain_position.as_deref().unwrap_or(""),
+            position_context.hero_is_ip,
+            position_context.ip_position,
+            position_context.oop_position,
             input.hand.as_deref().unwrap_or("ALL"),
             input.board,
             flop_board
@@ -253,20 +260,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             continue;
         };
         println!(
-            "Range keys: IP={} | OOP={}",
+            "Range keys: hero={} | villain={} | attempted_line={}",
             range_pair.hero_range_key,
-            range_pair.villain_range_key
+            range_pair.villain_range_key,
+            range_pair.attempted_line
         );
 
-        let hero_is_ip = true;
-        let hero_player = IP_PLAYER;
+        let hero_is_ip = position_context.hero_is_ip;
+        let hero_player = if hero_is_ip { IP_PLAYER } else { OOP_PLAYER };
         let starting_pot_bb = pot_config.starting_pot_bb;
         let starting_pot = bb_to_chips(starting_pot_bb);
         let effective_stack = bb_to_chips(pot_config.effective_stack_bb);
-        let sizings = ip_flop_sizings(input.spot_type.as_str());
+        let sizings = hero_flop_sizings(input.spot_type.as_str(), hero_is_ip);
 
         for &sizing in sizings {
-            println!("Running IP flop sizing {}", sizing.label);
+            println!(
+                "Running Hero {} flop sizing {}",
+                if hero_is_ip { "IP" } else { "OOP" },
+                sizing.label
+            );
             let solve_result = catch_unwind(AssertUnwindSafe(|| {
                 solve_spot(
                     board,
@@ -310,12 +322,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let normalized = normalize_hand_label(hand);
                     let Some(combo) = solve.hands.iter().find(|combo| normalize_hand_label(&combo.label) == normalized) else {
                         eprintln!(
-                            "Skipping spot {}: hand {} is not in IP range. IP position = {} OOP position = {} Pot type = {} IP range key = {} IP range string = {} board={}",
+                            "Skipping spot {}: hand {} is not in hero range. Hero position = {} Villain position = {} Pot type = {} hero_is_ip = {} IP position = {} OOP position = {} Hero range key = {} Hero range string = {} board={}",
                             input.spot_id,
                             hand,
                             input.hero_position,
                             input.villain_position.as_deref().unwrap_or(""),
                             input.spot_type,
+                            position_context.hero_is_ip,
+                            position_context.ip_position,
+                            position_context.oop_position,
                             range_pair.hero_range_key,
                             range_pair.hero_range,
                             input.board
@@ -330,11 +345,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             for hand in target_hand {
                 let key = format!(
-                    "{}|{}|{}|{}|{}|{}|{}",
+                    "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
                     input.spot_id,
                     input.spot_type,
                     input.hero_position,
                     input.villain_position.as_deref().unwrap_or(""),
+                    position_context.hero_is_ip,
+                    position_context.ip_position,
+                    position_context.oop_position,
                     flop_board,
                     hand.label,
                     sizing.label
@@ -361,6 +379,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     input.spot_type.clone(),
                     input.hero_position.clone(),
                     input.villain_position.clone().unwrap_or_default(),
+                    position_context.hero_is_ip.to_string(),
+                    position_context.ip_position.clone(),
+                    position_context.oop_position.clone(),
                     flop_board.clone(),
                     hand.label,
                     sizing.label.to_string(),
@@ -638,6 +659,13 @@ struct RangePair {
     villain_range: String,
     hero_range_key: String,
     villain_range_key: String,
+    attempted_line: String,
+}
+
+struct PositionContext {
+    hero_is_ip: bool,
+    ip_position: String,
+    oop_position: String,
 }
 
 fn lookup_ranges(input: &ProbeSpot) -> Option<RangePair> {
@@ -652,14 +680,31 @@ fn lookup_ranges(input: &ProbeSpot) -> Option<RangePair> {
 }
 
 fn lookup_srp_ranges(hero: &str, villain: &str) -> Option<RangePair> {
-    let hero_range = rfi_range(hero).or_else(|| missing_range("RFI", hero, ""))?;
-    let villain_range = vs_open_call_range(villain, hero)
-        .or_else(|| missing_range("vs open call", villain, hero))?;
+    let (opener, caller) = srp_opener_caller(hero, villain)?;
+    let opener_range = rfi_range(opener).or_else(|| missing_range("RFI", opener, ""))?;
+    let caller_range = vs_open_call_range(caller, opener)
+        .or_else(|| missing_range("vs open call", caller, opener))?;
+    let (hero_range, villain_range, hero_key, villain_key) = if hero == opener {
+        (
+            opener_range,
+            caller_range,
+            format!("{opener} RFI"),
+            format!("{caller} vs {opener} Open call"),
+        )
+    } else {
+        (
+            caller_range,
+            opener_range,
+            format!("{caller} vs {opener} Open call"),
+            format!("{opener} RFI"),
+        )
+    };
     Some(make_range_pair(
         hero_range,
         villain_range,
-        format!("{hero} RFI"),
-        format!("{villain} vs {hero} Open call"),
+        hero_key,
+        villain_key,
+        format!("SRP opener={opener} caller={caller}"),
     ))
 }
 
@@ -675,6 +720,7 @@ fn lookup_3bp_ranges(hero: &str, villain: &str) -> Option<RangePair> {
             villain_3bet,
             format!("{hero} vs {villain} 3bet Defense 4bet+call"),
             format!("{villain} vs {hero} Open 3bet"),
+            format!("3BP opener-defender={hero} threebettor={villain}"),
         ));
     }
 
@@ -689,10 +735,15 @@ fn lookup_3bp_ranges(hero: &str, villain: &str) -> Option<RangePair> {
             &villain_range,
             format!("{hero} vs {villain} Open 3bet"),
             format!("{villain} vs {hero} 3bet Defense 4bet+call"),
+            format!("3BP threebettor={hero} opener-defender={villain}"),
         ));
     }
 
-    eprintln!("Missing 3BP range pair for IP={hero} OOP={villain}");
+    log_missing_range_keys(
+        format!("{hero} 3bet-defense OR {hero} vs {villain} Open 3bet"),
+        format!("{villain} vs {hero} Open 3bet OR {villain} 3bet-defense"),
+        format!("3BP hero={hero} villain={villain}"),
+    );
     None
 }
 
@@ -708,6 +759,7 @@ fn lookup_4bp_ranges(hero: &str, villain: &str) -> Option<RangePair> {
             &villain_range,
             format!("{hero} vs {villain} 3bet Defense 4bet"),
             format!("{villain} vs {hero} 4bet Defense shove+call"),
+            format!("4BP fourbettor={hero} defender={villain}"),
         ));
     }
 
@@ -722,10 +774,15 @@ fn lookup_4bp_ranges(hero: &str, villain: &str) -> Option<RangePair> {
             villain_4bet,
             format!("{hero} vs {villain} 4bet Defense shove+call"),
             format!("{villain} vs {hero} 3bet Defense 4bet"),
+            format!("4BP defender={hero} fourbettor={villain}"),
         ));
     }
 
-    eprintln!("Missing 4BP range pair for IP={hero} OOP={villain}; skipping exact spot");
+    log_missing_range_keys(
+        format!("{hero} 4bet OR 4bet-defense"),
+        format!("{villain} 4bet OR 4bet-defense"),
+        format!("4BP hero={hero} villain={villain}"),
+    );
     None
 }
 
@@ -734,18 +791,48 @@ fn make_range_pair(
     villain_range: &str,
     hero_range_key: String,
     villain_range_key: String,
+    attempted_line: String,
 ) -> RangePair {
     RangePair {
         hero_range: normalize_range_for_solver(hero_range),
         villain_range: normalize_range_for_solver(villain_range),
         hero_range_key,
         villain_range_key,
+        attempted_line,
     }
 }
 
 fn missing_range(kind: &str, position: &str, versus: &str) -> Option<&'static str> {
     eprintln!("Missing range key: kind={kind} position={position} versus={versus}");
     None
+}
+
+fn log_missing_range_keys(hero_range_key: String, villain_range_key: String, attempted_line: String) {
+    eprintln!("Missing range keys:");
+    eprintln!("hero_range_key = {hero_range_key}");
+    eprintln!("villain_range_key = {villain_range_key}");
+    eprintln!("attempted_line = {attempted_line}");
+}
+
+fn srp_opener_caller<'a>(hero: &'a str, villain: &'a str) -> Option<(&'a str, &'a str)> {
+    match (hero, villain) {
+        ("BB", opener) => Some((opener, "BB")),
+        (opener, "BB") => Some((opener, "BB")),
+        _ if rfi_range(hero).is_some() && vs_open_call_range(villain, hero).is_some() => {
+            Some((hero, villain))
+        }
+        _ if rfi_range(villain).is_some() && vs_open_call_range(hero, villain).is_some() => {
+            Some((villain, hero))
+        }
+        _ => {
+            log_missing_range_keys(
+                format!("{hero} or {villain} RFI"),
+                format!("{hero}/{villain} vs Open call"),
+                format!("SRP hero={hero} villain={villain}"),
+            );
+            None
+        }
+    }
 }
 
 fn combine_ranges(ranges: &[&str]) -> String {
@@ -994,8 +1081,13 @@ fn sizing_profile(pot_type: &str) -> SizingProfile {
     }
 }
 
-fn ip_flop_sizings(pot_type: &str) -> &'static [PostflopSizing] {
-    sizing_profile(pot_type).ip_flop
+fn hero_flop_sizings(pot_type: &str, hero_is_ip: bool) -> &'static [PostflopSizing] {
+    let profile = sizing_profile(pot_type);
+    if hero_is_ip {
+        profile.ip_flop
+    } else {
+        profile.oop_flop
+    }
 }
 
 fn solve_spot(
@@ -1354,6 +1446,9 @@ fn write_header(writer: &mut csv::Writer<File>) -> Result<(), Box<dyn Error>> {
         "spot_type",
         "hero_position",
         "villain_position",
+        "hero_is_ip",
+        "ip_position",
+        "oop_position",
         "board",
         "hand",
         "bet_size",
@@ -1394,6 +1489,20 @@ fn is_in_position(hero: &str, villain: Option<&str>) -> bool {
         return hero != "SB";
     };
     postflop_position_order(hero) > postflop_position_order(villain)
+}
+
+fn determine_ip_oop(hero: &str, villain: &str) -> PositionContext {
+    let hero_is_ip = is_in_position(hero, Some(villain));
+    let (ip_position, oop_position) = if hero_is_ip {
+        (hero.to_string(), villain.to_string())
+    } else {
+        (villain.to_string(), hero.to_string())
+    };
+    PositionContext {
+        hero_is_ip,
+        ip_position,
+        oop_position,
+    }
 }
 
 fn postflop_position_order(position: &str) -> i32 {
