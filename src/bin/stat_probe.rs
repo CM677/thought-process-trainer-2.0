@@ -15,26 +15,34 @@ const OUTPUT_FILE: &str = "stat_probe_output.csv";
 const IP_PLAYER: usize = 1;
 const OOP_PLAYER: usize = 0;
 
-const POSTFLOP_SIZINGS: [PostflopSizing; 3] = [
-    PostflopSizing {
-        label: "33%",
-        suffix: "33",
-        pct: 0.33,
-        tree_size: "33%",
-    },
-    PostflopSizing {
-        label: "75%",
-        suffix: "75",
-        pct: 0.75,
-        tree_size: "75%",
-    },
-    PostflopSizing {
-        label: "125%",
-        suffix: "125",
-        pct: 1.25,
-        tree_size: "125%",
-    },
+const SRP_IP_FLOP_SIZINGS: &[PostflopSizing] = &[
+    PostflopSizing { label: "33%", suffix: "33", pct: 0.33, tree_size: "33%" },
+    PostflopSizing { label: "75%", suffix: "75", pct: 0.75, tree_size: "75%" },
 ];
+const THREE_BP_IP_FLOP_SIZINGS: &[PostflopSizing] = &[
+    PostflopSizing { label: "20%", suffix: "20", pct: 0.20, tree_size: "20%" },
+    PostflopSizing { label: "60%", suffix: "60", pct: 0.60, tree_size: "60%" },
+    PostflopSizing { label: "125%", suffix: "125", pct: 1.25, tree_size: "125%" },
+];
+const FOUR_BP_IP_FLOP_SIZINGS: &[PostflopSizing] = &[
+    PostflopSizing { label: "15%", suffix: "15", pct: 0.15, tree_size: "15%" },
+    PostflopSizing { label: "50%", suffix: "50", pct: 0.50, tree_size: "50%" },
+];
+const SRP_OOP_FLOP_SIZINGS: &[PostflopSizing] = SRP_IP_FLOP_SIZINGS;
+const THREE_BP_OOP_FLOP_SIZINGS: &[PostflopSizing] = THREE_BP_IP_FLOP_SIZINGS;
+const FOUR_BP_OOP_FLOP_SIZINGS: &[PostflopSizing] = FOUR_BP_IP_FLOP_SIZINGS;
+const IP_SRP_TURN_SIZINGS: &[&str] = &["50%", "100%"];
+const IP_SRP_RIVER_SIZINGS: &[&str] = &["50%", "100%", "150%"];
+const IP_3BP_TURN_SIZINGS: &[&str] = &["50%", "100%"];
+const IP_3BP_RIVER_SIZINGS: &[&str] = &["50%", "100%"];
+const IP_4BP_TURN_SIZINGS: &[&str] = &["25%", "67%"];
+const IP_4BP_RIVER_SIZINGS: &[&str] = &["33%", "75%"];
+const OOP_SRP_TURN_SIZINGS: &[&str] = &["33%", "75%"];
+const OOP_SRP_RIVER_SIZINGS: &[&str] = &["33%", "100%"];
+const OOP_3BP_TURN_SIZINGS: &[&str] = &["50%", "125%"];
+const OOP_3BP_RIVER_SIZINGS: &[&str] = &["50%", "100%"];
+const OOP_4BP_TURN_SIZINGS: &[&str] = &["25%", "67%"];
+const OOP_4BP_RIVER_SIZINGS: &[&str] = &["33%", "75%"];
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -43,6 +51,16 @@ struct PostflopSizing {
     suffix: &'static str,
     pct: f64,
     tree_size: &'static str,
+}
+
+#[allow(dead_code)]
+struct SizingProfile {
+    ip_flop: &'static [PostflopSizing],
+    ip_turn: &'static [&'static str],
+    ip_river: &'static [&'static str],
+    oop_flop: &'static [PostflopSizing],
+    oop_turn: &'static [&'static str],
+    oop_river: &'static [&'static str],
 }
 
 #[allow(dead_code)]
@@ -143,6 +161,7 @@ impl SkipSummary {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let input_rows = load_input_rows()?;
+    println!("Input interpretation: Position 1 = IP / hero, Position 2 = OOP / villain.");
     let rows_to_process = match MAX_INPUT_ROWS_TO_PROCESS {
         Some(limit) => {
             println!("MAX_INPUT_ROWS_TO_PROCESS = {limit}");
@@ -200,7 +219,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         println!(
-            "Running spot {}: {} {} vs {} hand={} full_board={} flop={}",
+            "Running spot {}: {} IP={} OOP={} hand={} full_board={} flop={}",
             input.spot_id,
             input.spot_type,
             input.hero_position,
@@ -209,12 +228,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             input.board,
             flop_board
         );
-
-        if input.spot_type == "4bp" {
-            eprintln!("Skipping spot {}: 4bp not implemented yet", input.spot_id);
-            skipped.unsupported_4bp += 1;
-            continue;
-        }
 
         let Some(pot_config) = postflop_pot_config(input) else {
             eprintln!(
@@ -239,15 +252,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             skipped.no_range_pair += 1;
             continue;
         };
+        println!(
+            "Range keys: IP={} | OOP={}",
+            range_pair.hero_range_key,
+            range_pair.villain_range_key
+        );
 
-        let hero_is_ip = is_in_position(&input.hero_position, input.villain_position.as_deref());
-        let hero_player = if hero_is_ip { IP_PLAYER } else { OOP_PLAYER };
+        let hero_is_ip = true;
+        let hero_player = IP_PLAYER;
         let starting_pot_bb = pot_config.starting_pot_bb;
         let starting_pot = bb_to_chips(starting_pot_bb);
         let effective_stack = bb_to_chips(pot_config.effective_stack_bb);
+        let sizings = ip_flop_sizings(input.spot_type.as_str());
 
-        for sizing in POSTFLOP_SIZINGS {
-            println!("Running sizing {}", sizing.label);
+        for &sizing in sizings {
+            println!("Running IP flop sizing {}", sizing.label);
             let solve_result = catch_unwind(AssertUnwindSafe(|| {
                 solve_spot(
                     board,
@@ -291,14 +310,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let normalized = normalize_hand_label(hand);
                     let Some(combo) = solve.hands.iter().find(|combo| normalize_hand_label(&combo.label) == normalized) else {
                         eprintln!(
-                            "Skipping spot {}: hand {} is not legal/in-range on board {}; hero={} villain={} pot_type={} hero_range={}",
+                            "Skipping spot {}: hand {} is not in IP range. IP position = {} OOP position = {} Pot type = {} IP range key = {} IP range string = {} board={}",
                             input.spot_id,
                             hand,
-                            input.board,
                             input.hero_position,
                             input.villain_position.as_deref().unwrap_or(""),
                             input.spot_type,
-                            range_pair.hero_range
+                            range_pair.hero_range_key,
+                            range_pair.hero_range,
+                            input.board
                         );
                         skipped.hand_not_in_range += 1;
                         continue;
@@ -616,6 +636,8 @@ fn random_board(rng: &mut Lcg) -> String {
 struct RangePair {
     hero_range: String,
     villain_range: String,
+    hero_range_key: String,
+    villain_range_key: String,
 }
 
 fn lookup_ranges(input: &ProbeSpot) -> Option<RangePair> {
@@ -624,52 +646,106 @@ fn lookup_ranges(input: &ProbeSpot) -> Option<RangePair> {
     match input.spot_type.as_str() {
         "srp" => lookup_srp_ranges(hero, villain),
         "3bp" => lookup_3bp_ranges(hero, villain),
-        "4bp" => None,
+        "4bp" => lookup_4bp_ranges(hero, villain),
         _ => None,
     }
 }
 
 fn lookup_srp_ranges(hero: &str, villain: &str) -> Option<RangePair> {
-    let hero_is_opener = postflop_position_order(hero) > postflop_position_order(villain);
-    let hero_range = if hero_is_opener {
-        rfi_range(hero)?
-    } else {
-        vs_open_call_range(hero, villain)?
-    };
-    let villain_range = if hero_is_opener {
-        vs_open_call_range(villain, hero)?
-    } else {
-        rfi_range(villain)?
-    };
-    Some(make_range_pair(hero_range, villain_range))
+    let hero_range = rfi_range(hero).or_else(|| missing_range("RFI", hero, ""))?;
+    let villain_range = vs_open_call_range(villain, hero)
+        .or_else(|| missing_range("vs open call", villain, hero))?;
+    Some(make_range_pair(
+        hero_range,
+        villain_range,
+        format!("{hero} RFI"),
+        format!("{villain} vs {hero} Open call"),
+    ))
 }
 
 fn lookup_3bp_ranges(hero: &str, villain: &str) -> Option<RangePair> {
-    let hero_is_opener_defending = postflop_position_order(hero) > postflop_position_order(villain);
-    let hero_range = if hero_is_opener_defending {
-        combine_ranges(&[
-            threebet_defense_4bet_range(hero, villain)?,
-            threebet_defense_call_range(hero, villain)?,
-        ])
-    } else {
-        vs_open_3bet_range(hero, villain)?.to_string()
-    };
-    let villain_range = if hero_is_opener_defending {
-        vs_open_3bet_range(villain, hero)?.to_string()
-    } else {
-        combine_ranges(&[
-            threebet_defense_4bet_range(villain, hero)?,
-            threebet_defense_call_range(villain, hero)?,
-        ])
-    };
-    Some(make_range_pair(&hero_range, &villain_range))
+    if let (Some(hero_4bet), Some(hero_call), Some(villain_3bet)) = (
+        threebet_defense_4bet_range(hero, villain),
+        threebet_defense_call_range(hero, villain),
+        vs_open_3bet_range(villain, hero),
+    ) {
+        let hero_range = combine_ranges(&[hero_4bet, hero_call]);
+        return Some(make_range_pair(
+            &hero_range,
+            villain_3bet,
+            format!("{hero} vs {villain} 3bet Defense 4bet+call"),
+            format!("{villain} vs {hero} Open 3bet"),
+        ));
+    }
+
+    if let (Some(hero_3bet), Some(villain_4bet), Some(villain_call)) = (
+        vs_open_3bet_range(hero, villain),
+        threebet_defense_4bet_range(villain, hero),
+        threebet_defense_call_range(villain, hero),
+    ) {
+        let villain_range = combine_ranges(&[villain_4bet, villain_call]);
+        return Some(make_range_pair(
+            hero_3bet,
+            &villain_range,
+            format!("{hero} vs {villain} Open 3bet"),
+            format!("{villain} vs {hero} 3bet Defense 4bet+call"),
+        ));
+    }
+
+    eprintln!("Missing 3BP range pair for IP={hero} OOP={villain}");
+    None
 }
 
-fn make_range_pair(hero_range: &str, villain_range: &str) -> RangePair {
+fn lookup_4bp_ranges(hero: &str, villain: &str) -> Option<RangePair> {
+    if let (Some(hero_4bet), Some(villain_shove), Some(villain_call)) = (
+        threebet_defense_4bet_range(hero, villain),
+        fourbet_defense_shove_range(villain, hero),
+        fourbet_defense_call_range(villain, hero),
+    ) {
+        let villain_range = combine_ranges(&[villain_shove, villain_call]);
+        return Some(make_range_pair(
+            hero_4bet,
+            &villain_range,
+            format!("{hero} vs {villain} 3bet Defense 4bet"),
+            format!("{villain} vs {hero} 4bet Defense shove+call"),
+        ));
+    }
+
+    if let (Some(hero_shove), Some(hero_call), Some(villain_4bet)) = (
+        fourbet_defense_shove_range(hero, villain),
+        fourbet_defense_call_range(hero, villain),
+        threebet_defense_4bet_range(villain, hero),
+    ) {
+        let hero_range = combine_ranges(&[hero_shove, hero_call]);
+        return Some(make_range_pair(
+            &hero_range,
+            villain_4bet,
+            format!("{hero} vs {villain} 4bet Defense shove+call"),
+            format!("{villain} vs {hero} 3bet Defense 4bet"),
+        ));
+    }
+
+    eprintln!("Missing 4BP range pair for IP={hero} OOP={villain}; skipping exact spot");
+    None
+}
+
+fn make_range_pair(
+    hero_range: &str,
+    villain_range: &str,
+    hero_range_key: String,
+    villain_range_key: String,
+) -> RangePair {
     RangePair {
         hero_range: normalize_range_for_solver(hero_range),
         villain_range: normalize_range_for_solver(villain_range),
+        hero_range_key,
+        villain_range_key,
     }
+}
+
+fn missing_range(kind: &str, position: &str, versus: &str) -> Option<&'static str> {
+    eprintln!("Missing range key: kind={kind} position={position} versus={versus}");
+    None
 }
 
 fn combine_ranges(ranges: &[&str]) -> String {
@@ -826,12 +902,31 @@ fn strip_range_label(token: &str) -> &str {
 fn normalize_range_token(token: &str) -> String {
     let token = token.trim();
     let Some((left, right)) = token.split_once('-') else {
-        return token.to_string();
+        return normalize_combo_class(token);
     };
-    if combo_class_order(left) < combo_class_order(right) {
+    let left = normalize_combo_class(left);
+    let right = normalize_combo_class(right);
+    if combo_class_order(&left) < combo_class_order(&right) {
         format!("{}-{}", right.trim(), left.trim())
     } else {
-        token.to_string()
+        format!("{}-{}", left.trim(), right.trim())
+    }
+}
+
+fn normalize_combo_class(class: &str) -> String {
+    let class = class.trim();
+    let chars = class.chars().collect::<Vec<_>>();
+    if chars.len() < 3 {
+        return class.to_string();
+    }
+
+    let first = chars[0];
+    let second = chars[1];
+    let suffix = chars[2..].iter().collect::<String>();
+    if first == second || rank_order(first) >= rank_order(second) {
+        class.to_string()
+    } else {
+        format!("{second}{first}{suffix}")
     }
 }
 
@@ -862,9 +957,45 @@ fn postflop_pot_config(input: &ProbeSpot) -> Option<PostflopPotConfig> {
             starting_pot_bb: 18.0,
             effective_stack_bb: STARTING_STACK_BB,
         }),
-        "4bp" => None,
+        "4bp" => Some(PostflopPotConfig {
+            starting_pot_bb: 45.0,
+            effective_stack_bb: STARTING_STACK_BB,
+        }),
         _ => None,
     }
+}
+
+fn sizing_profile(pot_type: &str) -> SizingProfile {
+    match pot_type {
+        "3bp" => SizingProfile {
+            ip_flop: THREE_BP_IP_FLOP_SIZINGS,
+            ip_turn: IP_3BP_TURN_SIZINGS,
+            ip_river: IP_3BP_RIVER_SIZINGS,
+            oop_flop: THREE_BP_OOP_FLOP_SIZINGS,
+            oop_turn: OOP_3BP_TURN_SIZINGS,
+            oop_river: OOP_3BP_RIVER_SIZINGS,
+        },
+        "4bp" => SizingProfile {
+            ip_flop: FOUR_BP_IP_FLOP_SIZINGS,
+            ip_turn: IP_4BP_TURN_SIZINGS,
+            ip_river: IP_4BP_RIVER_SIZINGS,
+            oop_flop: FOUR_BP_OOP_FLOP_SIZINGS,
+            oop_turn: OOP_4BP_TURN_SIZINGS,
+            oop_river: OOP_4BP_RIVER_SIZINGS,
+        },
+        _ => SizingProfile {
+            ip_flop: SRP_IP_FLOP_SIZINGS,
+            ip_turn: IP_SRP_TURN_SIZINGS,
+            ip_river: IP_SRP_RIVER_SIZINGS,
+            oop_flop: SRP_OOP_FLOP_SIZINGS,
+            oop_turn: OOP_SRP_TURN_SIZINGS,
+            oop_river: OOP_SRP_RIVER_SIZINGS,
+        },
+    }
+}
+
+fn ip_flop_sizings(pot_type: &str) -> &'static [PostflopSizing] {
+    sizing_profile(pot_type).ip_flop
 }
 
 fn solve_spot(
