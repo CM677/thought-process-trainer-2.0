@@ -27,6 +27,124 @@ const BB_VS_UTG_CALL_RANGE: &str = "JJ-22,AQs-A6s,KQs-K8s,QTs-Q9s,JTs-J9s,T9s-T8
 const BB_VS_HJ_CALL_RANGE: &str = "JJ-22,AQs-A6s,KTs-K8s,Q9s,J9s-J8s,T8s-T7s,98s-97s,87s-86s,76s-75s,64s,54s-53s,AQo-ATo,KJo+,K6s-K5s,KQo,43s,QJo,A2s";
 const BB_VS_CO_CALL_RANGE: &str = "TT-22,AJs-A6s,K9s-K8s,JTs-J8s,T8s-T7s,98s-96s,87s-85s,75s,64s,54s-53s,AQo-ATo,KTo+,K6s-K2s,QTo+,JTo,Q8s-Q6s,A2s,43s";
 const BB_VS_SB_CALL_RANGE: &str = "99-22,AJs-A6s,KJs-K2s,J9s-J6s,T8s-T6s,97s-95s,87s-85s,75s-74s,64s-63s,53s-52s,43s,AJo-A6o,K9o+,K6s-K2s,Q9o+,JTo,QJs-Q2s,A4s-A2s,T9o,98o";
+// Temporary approximate SRP caller ranges. Refine these when dedicated preflop solves are available.
+const SB_VS_BTN_CALL_RANGE: &str = "66-22,A7s-A2s,K9s-K2s,QTs-Q2s,JTs-J4s,T9s-T6s,98s-96s,87s-85s,76s-75s,65s,54s,AJo-ATo,KQo-KTo,QJo-QTo,JTo";
+const SB_VS_CO_CALL_RANGE: &str = "88-22,ATs-A2s,KTs-K2s,QTs-Q6s,JTs-J8s,T9s-T8s,98s,87s,76s,65s,AQo-ATo,KQo-KTo,QJo-QTo,JTo";
+const SB_VS_HJ_CALL_RANGE: &str = "99-22,ATs-A2s,KTs-K5s,QTs-Q9s,JTs,T9s,98s,87s,76s,65s,AQo-ATo,KQo-KTo,QJo";
+const UTG_VS_HJ_CALL_RANGE: &str = "99-66,AQs-ATs,KQs-KJs,QJs,JTs,T9s,65s,AQo";
+
+// Central registry retained for upcoming SRP, 3-bet, 4-bet, and 5-bet exporters.
+// The current 20-spot runner uses the named constants above for its active range pairs.
+#[allow(dead_code)]
+const PREFLOP_RANGE_REGISTRY: &[(&str, &str)] = &[
+    ("UTG RFI", UTG_RANGE),
+    ("HJ RFI", HJ_RANGE),
+    ("CO RFI", CO_RANGE),
+    ("BTN RFI", BTN_RANGE),
+    ("SB RFI", SB_RANGE),
+    ("HJ vs UTG Open 3bet", "99+,ATs+,KTs+,AQo+,65s,A4s-A5s"),
+    ("CO vs UTG Open 3bet", "88+,ATs+,KTs+,AQo+,65s,A4s-A5s"),
+    ("CO vs HJ Open 3bet", "88+,ATs+,KTs+,AQo+,KQo,QJs,65s,A3s-A5s"),
+    ("BTN vs UTG Open 3bet", "QQ+,AKs,AKo,KQo,QJs,JTs,T9s,K9s-KTs,A8s,A3s-A5s,65s"),
+    ("BTN vs UTG Open call", "77-JJ,A9s-AQs,QTs,AQo,KJs,KQs"),
+    ("BTN vs HJ Open 3bet", "QQ+,AKs,AKo,KQo,QJs,JTs,T9s,K9s-KTs,A3s-A8s,65s,76s,AJo"),
+    ("BTN vs HJ Open call", "66-JJ,A9s-AQs,QTs,AQo,KJs,KQs"),
+    ("BTN vs CO Open 3bet", "QQ+,AKs,AKo,KQo,QJs,J9s+,T9s,K8s-K9s,A2s-A3s,A5s-A7s,65s,76s,AJo-ATo,Q9s"),
+    ("BTN vs CO Open call", "55-JJ,A8s-AQs,QTs,AQo,A4s,KTs+"),
+    ("SB vs UTG Open 3bet", "TT+,ATs+,KTs+,QJs,AKo,A5s,65s"),
+    ("SB vs HJ Open 3bet", "99+,ATs+,KTs+,QJs,AKo,JTs,A4s-A5s,65s"),
+    ("SB vs CO Open 3bet", "88+,ATs+,KTs+,QTs+,AQo+,JTs,A4s-A5s,65s"),
+    ("SB vs BTN Open 3bet", "66+,A7s+,K9s+,QTs+,AJo+,JTs,A4s-A5s,65s,KQo,T9s"),
+    ("SB vs BTN Open call", SB_VS_BTN_CALL_RANGE),
+    ("SB vs CO Open call", SB_VS_CO_CALL_RANGE),
+    ("SB vs HJ Open call", SB_VS_HJ_CALL_RANGE),
+    ("UTG vs HJ Open call", UTG_VS_HJ_CALL_RANGE),
+    ("BB vs UTG Open 3bet", "QQ+,QJs,K7s,A5s-A3s,65s,AKs,AKo"),
+    ("BB vs UTG Open call", BB_VS_UTG_CALL_RANGE),
+    ("BB vs HJ Open 3bet", "QQ+,QTs+,KJs+,JTs,T9s,K7s,A5s-A3s,65s,AKs,AKo"),
+    ("BB vs HJ Open call", BB_VS_HJ_CALL_RANGE),
+    ("BB vs CO Open 3bet", "JJ+,AQs,Q9s+,KTs+,J9s+,T9s,K7s,A5s-A3s,65s,AKs,AKo,67s"),
+    ("BB vs CO Open call", BB_VS_CO_CALL_RANGE),
+    ("BB vs BTN Open 3bet", "TT+,KQs,QJs,J8s+,T7s+,A5s,65s,AKs,AQo+,67s,54s,98s,A5o"),
+    ("BB vs BTN Open call", BB_RANGE),
+    ("BB vs SB Open 3bet", "TT+,AQs,KQs,J8s+,T9s+,A5s,65s,AKs,AQo+,76s,54s,98s,A3o-A6o,K8o-K9o,J9o,T8o,J5s-J2s,T5s-T4s"),
+    ("BB vs SB Open call", BB_VS_SB_CALL_RANGE),
+    ("UTG vs HJ 3bet Defense 4bet", "KK+,AKs,AKo,AJs,KQs,A5s"),
+    ("UTG vs HJ 3bet Defense call", "QQ-JJ,99-66,AQs,JTs,65s"),
+    ("UTG vs CO 3bet Defense 4bet", "KK+,AKs,AKo,AJs,KQs,A5s"),
+    ("UTG vs CO 3bet Defense call", "QQ-JJ,99-66,AQs,JTs,65s,KJs,ATs"),
+    ("UTG vs BTN 3bet Defense 4bet", "KK+,AKs,AKo,AJs,A5s"),
+    ("UTG vs BTN 3bet Defense call", "QQ-55,AQs,JTs,65s,KJs+,ATs,QJs"),
+    ("UTG vs SB 3bet Defense 4bet", "KK+,AKo,A4s"),
+    ("UTG vs SB 3bet Defense call", "QQ-66,AQs,JTs,65s,KJs+,ATs,QJs,AKs,AJs,A5s"),
+    ("UTG vs BB 3bet Defense 4bet", "KK+,AKo,A4s"),
+    ("UTG vs BB 3bet Defense call", "QQ-66,AQs,JTs,65s,KJs+,ATs,QJs,AKs,AJs,A5s,A9s"),
+    ("HJ vs CO 3bet Defense 4bet", "QQ+,KJs+,AKs,AKo,AJs,A5s"),
+    ("HJ vs CO 3bet Defense call", "AQs,ATs,JTs,JJ-88,55,65s"),
+    ("HJ vs BTN 3bet Defense 4bet", "QQ+,KJs-KTs,AKs,AKo,A5s"),
+    ("HJ vs BTN 3bet Defense call", "AQs-A9s,JTs,JJ-55,65s,KQs,T9s,QJs"),
+    ("HJ vs SB 3bet Defense 4bet", "KK+,KJs-KTs,A4s"),
+    ("HJ vs SB 3bet Defense call", "AQs-ATs,JTs,QQ-77,55,65s,KQs,T9s,AKs,AKo,A5s,QJs"),
+    ("HJ vs BB 3bet Defense 4bet", "KK+,KTs,A3s"),
+    ("HJ vs BB 3bet Defense call", "AQs-A9s,JTs,QQ-55,65s,T9s,AKs,AKo,A5s-A4s,QTs+,KTs+"),
+    ("CO vs BTN 3bet Defense 4bet", "QQ+,AKs,AQo+,KTs-KJs,ATs,JTs,A4s"),
+    ("CO vs BTN 3bet Defense call", "JJ-44,AJs-AQs,A9s,A5s,KQs,T9s,65s,QTs+"),
+    ("CO vs SB 3bet Defense 4bet", "KK+,AKo,K9s,A4s"),
+    ("CO vs SB 3bet Defense call", "QQ-77,55,ATs+,A5s,KTs+,T9s,65s,QTs+,J9s+,AQo"),
+    ("CO vs BB 3bet Defense 4bet", "KK+,AKo,K9s,A7s,A2s"),
+    ("CO vs BB 3bet Defense call", "QQ-55,A8s+,A5s-A3s,KTs+,T9s,65s,QTs+,JTs,AQo,67s"),
+    ("BTN vs SB 3bet Defense 4bet", "QQ+,AJs,A7s,A3s,K9s,AKo,AJo"),
+    ("BTN vs SB 3bet Defense call", "JJ-44,A8s+,A4s-A5s,KTs+,QTs+,J9s+,T8s+,98s,87s,67s,65s,54s,KQo,AQo"),
+    ("BTN vs BB 3bet Defense 4bet", "QQ+,AJs,A2s,K7s-K6s,AKo,AJo"),
+    ("BTN vs BB 3bet Defense call", "JJ-44,A3s+,K8s+,Q9s+,J8s+,T8s+,98s,87s,67s,65s,54s,KQo,AQo"),
+    ("SB vs BB 3bet Defense 4bet", "AA-JJ,ATo+,AKs,A6s,A3s-A2s,K5s"),
+    ("SB vs BB 3bet Defense call", "AQs-A7s,A5s-A4s,K8s+,Q9s+,J8s+,T8s+,76s,65s,54s,TT-44"),
+    ("HJ vs UTG 4bet Defense shove", "KK,AKo"),
+    ("HJ vs UTG 4bet Defense call", "AA,ATs+,QQ-JJ,99,65s"),
+    ("CO vs UTG 4bet Defense shove", "KK,AKo"),
+    ("CO vs UTG 4bet Defense call", "AA,ATs+,QQ-JJ,99,65s,KQs"),
+    ("CO vs HJ 4bet Defense shove", "KK,AKo"),
+    ("CO vs HJ 4bet Defense call", "AA,ATs+,QQ-JJ,99,65s,KQs,A5s"),
+    ("BTN vs UTG 4bet Defense shove", "KK,AKo"),
+    ("BTN vs UTG 4bet Defense call", "AA,AKs,QQ,T9s,65s,A5s"),
+    ("BTN vs HJ 4bet Defense shove", "KK,AKo"),
+    ("BTN vs HJ 4bet Defense call", "AA,AKs,QQ,T9s,65s,A5s,76s"),
+    ("BTN vs CO 4bet Defense shove", "KK,AKo"),
+    ("BTN vs CO 4bet Defense call", "AA,AKs,QQ,T9s,65s,A5s,76s,J9s"),
+    ("SB vs UTG 4bet Defense shove", "KK+,AKo"),
+    ("SB vs UTG 4bet Defense call", "AKs,AJs,QQ,65s"),
+    ("SB vs HJ 4bet Defense shove", "KK+,AKo"),
+    ("SB vs HJ 4bet Defense call", "AJs+,QQ-JJ,99,65s"),
+    ("SB vs CO 4bet Defense shove", "KK+,AKo,A5s"),
+    ("SB vs CO 4bet Defense call", "AJs+,QQ-JJ,99-88,65s,JTs"),
+    ("SB vs BTN 4bet Defense shove", "QQ+,AKo,AKs,A5s"),
+    ("SB vs BTN 4bet Defense call", "ATs+,JJ-88,65s,JTs,66,T9s,QTs,KQs,AQo"),
+    ("BB vs UTG 4bet Defense shove", "AA,A5s"),
+    ("BB vs UTG 4bet Defense call", "AKs,KK-QQ,65s"),
+    ("BB vs HJ 4bet Defense shove", "KK+,AKo"),
+    ("BB vs HJ 4bet Defense call", "AKs,QQ,65s,T9s"),
+    ("BB vs CO 4bet Defense shove", "KK+,AKo,JJ"),
+    ("BB vs CO 4bet Defense call", "AKs,QQ,65s,T9s,JTs,AQs"),
+    ("BB vs BTN 4bet Defense shove", "KK-JJ,AKo,A5s"),
+    ("BB vs BTN 4bet Defense call", "AKs,65s,T9s,JTs,76s,TT,AQo,KQs,AQs,AA"),
+    ("BB vs SB 4bet Defense shove", "KK-JJ,AKo,A5s,KQs"),
+    ("BB vs SB 4bet Defense call", "AA,AKs-AQs,65s,T9s,JTs,76s,TT,AQo,KQs,98s,54s"),
+    ("UTG vs HJ 5bet Shove Defense call", "KK+,AKs"),
+    ("UTG vs CO 5bet Shove Defense call", "KK+,AKs"),
+    ("UTG vs BTN 5bet Shove Defense call", "KK+,AKs"),
+    ("UTG vs SB 5bet Shove Defense call", "KK+"),
+    ("UTG vs BB 5bet Shove Defense call", "KK+"),
+    ("HJ vs CO 5bet Shove Defense call", "KK+,AKs,AKo"),
+    ("HJ vs BTN 5bet Shove Defense call", "KK+,AKs,AKo"),
+    ("HJ vs SB 5bet Shove Defense call", "KK+"),
+    ("HJ vs BB 5bet Shove Defense call", "KK+"),
+    ("CO vs BTN 5bet Shove Defense call", "QQ+,AKs,AKo"),
+    ("CO vs SB 5bet Shove Defense call", "KK+,AKo"),
+    ("CO vs BB 5bet Shove Defense call", "KK+,AKo"),
+    ("BTN vs SB 5bet Shove Defense call", "QQ+,AKo"),
+    ("BTN vs BB 5bet Shove Defense call", "QQ+,AKo"),
+    ("SB vs BB 5bet Shove Defense call", "JJ+,AKo,AKs"),
+];
 
 const DEBUG_SCENARIOS: [DebugScenario; 20] = [
     DebugScenario {
@@ -92,8 +210,8 @@ const DEBUG_SCENARIOS: [DebugScenario; 20] = [
         board: "9s4h2h",
         full_board: "9s4h2h4dAd",
         ip_range: Some(BTN_RANGE),
-        oop_range: None,
-        missing_range_key: Some("SB vs BTN Open call"),
+        oop_range: Some(SB_VS_BTN_CALL_RANGE),
+        missing_range_key: None,
     },
     DebugScenario {
         spot_id: 24,
@@ -169,8 +287,8 @@ const DEBUG_SCENARIOS: [DebugScenario; 20] = [
         board: "4sKcKh",
         full_board: "4sKcKh2h8h",
         ip_range: Some(HJ_RANGE),
-        oop_range: None,
-        missing_range_key: Some("UTG vs HJ Open call"),
+        oop_range: Some(UTG_VS_HJ_CALL_RANGE),
+        missing_range_key: None,
     },
     DebugScenario {
         spot_id: 46,
@@ -191,8 +309,8 @@ const DEBUG_SCENARIOS: [DebugScenario; 20] = [
         board: "KcQc8d",
         full_board: "KcQc8d7cJd",
         ip_range: Some(HJ_RANGE),
-        oop_range: None,
-        missing_range_key: Some("SB vs HJ Open call"),
+        oop_range: Some(SB_VS_HJ_CALL_RANGE),
+        missing_range_key: None,
     },
     DebugScenario {
         spot_id: 55,
@@ -213,8 +331,8 @@ const DEBUG_SCENARIOS: [DebugScenario; 20] = [
         board: "Td4c3h",
         full_board: "Td4c3h3dTc",
         ip_range: Some(BTN_RANGE),
-        oop_range: None,
-        missing_range_key: Some("SB vs BTN Open call"),
+        oop_range: Some(SB_VS_BTN_CALL_RANGE),
+        missing_range_key: None,
     },
     DebugScenario {
         spot_id: 62,
@@ -235,8 +353,8 @@ const DEBUG_SCENARIOS: [DebugScenario; 20] = [
         board: "5dAsTh",
         full_board: "5dAsTh8cJd",
         ip_range: Some(CO_RANGE),
-        oop_range: None,
-        missing_range_key: Some("SB vs CO Open call"),
+        oop_range: Some(SB_VS_CO_CALL_RANGE),
+        missing_range_key: None,
     },
     DebugScenario {
         spot_id: 66,
@@ -340,11 +458,23 @@ enum ModalAction {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let sizing = Sizing {
-        tree_size: "125%",
-        csv_size: "1.25",
-        suffix: "125",
-    };
+    let flop_sizings = [
+        Sizing {
+            tree_size: "33%",
+            csv_size: "0.33",
+            suffix: "33",
+        },
+        Sizing {
+            tree_size: "75%",
+            csv_size: "0.75",
+            suffix: "75",
+        },
+        Sizing {
+            tree_size: "125%",
+            csv_size: "1.25",
+            suffix: "125",
+        },
+    ];
 
     println!("Running 20 IP SRP debug range scenarios...");
     let mut writer = csv::Writer::from_path(OUTPUT_FILE)?;
@@ -389,31 +519,41 @@ fn main() -> Result<(), Box<dyn Error>> {
             "Skipped {skipped_board_combos} combos because they contained board cards."
         );
 
-        println!(
-            "Solving {} range at {} pot",
-            scenario.hero_position, sizing.tree_size
-        );
-        match solve_debug_scenario(*scenario, sizing) {
-            Ok(solve) => {
-                let rows = export_debug_range_rows(
-                    &mut writer,
-                    scenario_index + 1,
-                    scenario,
-                    &solve,
-                )?;
-                total_rows += rows;
-                println!("Hero range combos exported: {rows}");
-            }
-            Err(error) => {
-                eprintln!(
-                    "Skipping scenario {} (Spot {}): solve failed at {}: {error}",
-                    scenario_index + 1,
-                    scenario.spot_id,
-                    sizing.tree_size
-                );
-                skipped_scenarios += 1;
+        let mut scenario_rows = 0usize;
+        let mut scenario_failed = false;
+        for sizing in flop_sizings {
+            println!(
+                "Solving {} range at {} pot",
+                scenario.hero_position, sizing.tree_size
+            );
+            match solve_debug_scenario(*scenario, sizing) {
+                Ok(solve) => {
+                    let rows = export_debug_range_rows(
+                        &mut writer,
+                        scenario_index + 1,
+                        scenario,
+                        &solve,
+                    )?;
+                    scenario_rows += rows;
+                    total_rows += rows;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Scenario {} (Spot {}) failed at {}: {error}",
+                        scenario_index + 1,
+                        scenario.spot_id,
+                        sizing.tree_size
+                    );
+                    scenario_failed = true;
+                }
             }
         }
+        if scenario_failed {
+            skipped_scenarios += 1;
+        }
+        println!(
+            "Hero range combos exported: {live_combos} per sizing, {scenario_rows} rows total"
+        );
     }
 
     writer.flush()?;
@@ -519,33 +659,54 @@ fn normalize_range_for_solver(range: &str) -> String {
 }
 
 fn normalize_range_token(token: &str) -> String {
-    if let Some((first, second)) = token.split_once('-') {
-        return format!(
-            "{}-{}",
-            normalize_hand_class(first),
-            normalize_hand_class(second)
-        );
+    let compact = token
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    if let Some((first, second)) = compact.split_once('-') {
+        let first = normalize_hand_class(first);
+        let second = normalize_hand_class(second);
+        return if hand_class_key(&first) >= hand_class_key(&second) {
+            format!("{first}-{second}")
+        } else {
+            format!("{second}-{first}")
+        };
     }
 
-    let suffix = token.strip_suffix('+').map(|_| "+").unwrap_or("");
-    let class = token.strip_suffix('+').unwrap_or(token);
+    let suffix = compact.strip_suffix('+').map(|_| "+").unwrap_or("");
+    let class = compact.strip_suffix('+').unwrap_or(&compact);
     format!("{}{}", normalize_hand_class(class), suffix)
 }
 
 fn normalize_hand_class(class: &str) -> String {
+    let compact = class
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let bytes = compact.as_bytes();
+    if bytes.len() < 2 {
+        return compact.to_uppercase();
+    }
+
+    let first = (bytes[0] as char).to_ascii_uppercase();
+    let second = (bytes[1] as char).to_ascii_uppercase();
+    let suffix = compact[2..].to_ascii_lowercase();
+    if rank_value(first) >= rank_value(second) {
+        return format!("{first}{second}{suffix}");
+    }
+
+    format!("{second}{first}{suffix}")
+}
+
+fn hand_class_key(class: &str) -> (u8, u8) {
     let bytes = class.as_bytes();
     if bytes.len() < 2 {
-        return class.to_string();
+        return (0, 0);
     }
-
-    let first = bytes[0] as char;
-    let second = bytes[1] as char;
-    if rank_value(first) >= rank_value(second) {
-        return class.to_string();
-    }
-
-    let suffix = &class[2..];
-    format!("{second}{first}{suffix}")
+    (
+        rank_value((bytes[0] as char).to_ascii_uppercase()),
+        rank_value((bytes[1] as char).to_ascii_uppercase()),
+    )
 }
 
 fn rank_value(rank: char) -> u8 {
