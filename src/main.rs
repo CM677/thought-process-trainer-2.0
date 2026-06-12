@@ -1,8 +1,7 @@
 use postflop_solver::*;
-use std::collections::HashMap;
 use std::error::Error;
 
-const OUTPUT_FILE: &str = "output5.csv";
+const OUTPUT_FILE: &str = "output_debug_two_spots.csv";
 
 const OOP_PLAYER: usize = 0;
 const IP_PLAYER: usize = 1;
@@ -18,6 +17,43 @@ const STARTING_STACK: i32 = 9750;
 const BTN_RANGE: &str =
     "22+,A2s+,K2s+,Q2s+,A2o+,K7o+,Q9o+,J9o+,T9o,J4s+,T6s+,96s+,86s+,75s+,65s,54s";
 const BB_RANGE: &str = "99-22,AQs-A6s,KJs-K2s,J7s-J4s,T6s,97s-96s,87s-85s,75s-74s,64s-63s,53s,43s,AJo-A6o,K9o+,QTo+,JTo,QTs-Q2s,A4s-A2s,T9o";
+const UTG_RANGE: &str = "66+,A2s+,K6s+,QTs+,ATo+,KJo+,JTs,T9s,65s";
+const BB_VS_UTG_CALL_RANGE: &str = "JJ-22,AQs-A6s,KQs-K8s,QTs-Q9s,JTs-J9s,T9s-T8s,98s-97s,87s-86s,76s-75s,64s,54s-53s,AQo-AJo,KQo,A2s";
+
+const DEBUG_SCENARIOS: [DebugScenario; 2] = [
+    DebugScenario {
+        log_name: "existing Kh4h spot",
+        spot_name: "btn-vs-bb-srp-debug-kh4h",
+        hero_position: "BTN",
+        villain_position: "BB",
+        hand: "Kh4h",
+        board: "3s4s5c",
+        ip_range: BTN_RANGE,
+        oop_range: BB_RANGE,
+    },
+    DebugScenario {
+        log_name: "UTG vs BB Ah6h on Ad7d4h",
+        spot_name: "utg-vs-bb-srp-debug-ah6h",
+        hero_position: "UTG",
+        villain_position: "BB",
+        hand: "Ah6h",
+        board: "Ad7d4h",
+        ip_range: UTG_RANGE,
+        oop_range: BB_VS_UTG_CALL_RANGE,
+    },
+];
+
+#[derive(Clone, Copy)]
+struct DebugScenario {
+    log_name: &'static str,
+    spot_name: &'static str,
+    hero_position: &'static str,
+    villain_position: &'static str,
+    hand: &'static str,
+    board: &'static str,
+    ip_range: &'static str,
+    oop_range: &'static str,
+}
 
 #[derive(Clone, Copy)]
 struct Sizing {
@@ -96,8 +132,6 @@ enum ModalAction {
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Writing {OUTPUT_FILE}");
-    println!("Hardcoded flop: {FLOP}, turn: {TURN}");
-
     let flop_sizings = [
         Sizing {
             tree_size: "33%",
@@ -115,136 +149,229 @@ fn main() -> Result<(), Box<dyn Error>> {
             suffix: "125",
         },
     ];
-    let turn_sizings = [
-        Sizing {
-            tree_size: "50%",
-            csv_size: "0.50",
-            suffix: "50",
-        },
-        Sizing {
-            tree_size: "100%",
-            csv_size: "1.00",
-            suffix: "100",
-        },
-    ];
 
-    let mut flop_solves = Vec::new();
-    let mut flop_branch_data = Vec::new();
-    let xx_source_solve = solve_flop_all_sizes_for_xx()?;
-
-    for sizing in flop_sizings {
-        println!("Running flop solve: {}", sizing.tree_size);
-        let solved = solve_flop_sizing(sizing)?;
-        let branch = inspect_flop_branches(&solved)?;
+    let mut writer = csv::Writer::from_path(OUTPUT_FILE)?;
+    write_debug_header(&mut writer)?;
+    let mut total_rows = 0usize;
+    for (scenario_index, scenario) in DEBUG_SCENARIOS.iter().enumerate() {
         println!(
-            "BB raise option versus flop {} bet: {}",
-            sizing.tree_size, branch.bb_raise_available
+            "Running debug scenario {}: {}",
+            scenario_index + 1,
+            scenario.log_name
         );
-        flop_branch_data.push(branch);
-        flop_solves.push(solved);
-    }
-
-    println!(
-        "BB turn donk filtering enabled: OOP gets one 50% pot donk option before BTN's turn decision"
-    );
-
-    println!(
-        "XX branch source: dedicated flop solve with BTN sizes 33%, 75%, and 125% all available."
-    );
-    println!(
-        "XX branch uses BTN/IP modal check-back hands from that dedicated solve after BB checks flop."
-    );
-    println!(
-        "XX branch BB pre-filter range starts from the full BB live flop range, not a flop-call range."
-    );
-    let xx_hero = branch_hero_hands(&xx_source_solve, ModalAction::Check);
-    let xx_villain = xx_source_solve.villains.clone();
-    println!(
-        "XX branch before turn donk filtering: hero check-back combos={}, BB live combos={}",
-        xx_hero.len(),
-        xx_villain.len()
-    );
-
-    let turn_branches = [
-        ("xx", "null", 600, 9750, xx_hero, xx_villain),
-        (
-            "b33c",
-            "0.33",
-            996,
-            9552,
-            branch_hero_hands(&flop_solves[0], ModalAction::Bet),
-            flop_branch_data[0].bb_call_hands.clone(),
-        ),
-        (
-            "b75c",
-            "0.75",
-            1500,
-            9300,
-            branch_hero_hands(&flop_solves[1], ModalAction::Bet),
-            flop_branch_data[1].bb_call_hands.clone(),
-        ),
-        (
-            "b125c",
-            "1.25",
-            2100,
-            9000,
-            branch_hero_hands(&flop_solves[2], ModalAction::Bet),
-            flop_branch_data[2].bb_call_hands.clone(),
-        ),
-    ];
-
-    let mut turn_solves = Vec::new();
-    for (flop_action, flop_bet_size, pot, stack, hero_hands, villain_hands) in turn_branches {
-        let checked_villains =
-            filter_bb_turn_checks(flop_action, pot, stack, &hero_hands, &villain_hands)?;
-        println!(
-            "Turn branch {flop_action}: hero combos={}, villain combos after check filter={}",
-            hero_hands.len(),
-            checked_villains.len()
-        );
-        for sizing in turn_sizings {
-            if hero_hands.is_empty() || checked_villains.is_empty() {
-                println!(
-                    "Skipping turn branch {flop_action}, sizing {} because a branch range is empty",
-                    sizing.tree_size
-                );
-                continue;
-            }
+        for sizing in flop_sizings {
             println!(
-                "Running turn branch {flop_action}, turn sizing {}",
-                sizing.tree_size
+                "Solving {} at {} pot",
+                scenario.hand, sizing.tree_size
             );
-            turn_solves.push(solve_turn_sizing(
-                flop_action,
-                flop_bet_size,
-                sizing,
-                pot,
-                stack,
-                &hero_hands,
-                &checked_villains,
-            )?);
+            match solve_debug_scenario(*scenario, sizing) {
+                Ok(solve) => {
+                    export_debug_hand_row(&mut writer, scenario, &solve)?;
+                    total_rows += 1;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Debug scenario {} failed at {}: {error}",
+                        scenario_index + 1,
+                        sizing.tree_size
+                    );
+                    return Err(error);
+                }
+            }
         }
     }
 
-    let mut writer = csv::Writer::from_path(OUTPUT_FILE)?;
-    write_header(&mut writer)?;
-
-    let mut total_rows = 0usize;
-    let mut street_counts: HashMap<&'static str, usize> = HashMap::new();
-    for solve in flop_solves.iter().chain(turn_solves.iter()) {
-        let rows = export_decision_rows(&mut writer, solve)?;
-        println!(
-            "Rows for {} {} {} / {}: {}",
-            solve.meta.street, solve.meta.flop_action, solve.meta.flop_bet_size, solve.meta.turn_bet_size, rows
-        );
-        total_rows += rows;
-        *street_counts.entry(solve.meta.street).or_default() += rows;
-    }
-
     writer.flush()?;
-    println!("Street row counts: {street_counts:?}");
+    println!("Writing {OUTPUT_FILE}");
     println!("Done. Written {total_rows} rows to {OUTPUT_FILE}");
-    println!("Example spot_name: btn-bb-srp-ah7s4c-6s");
+    println!("Done.");
+    Ok(())
+}
+
+fn solve_debug_scenario(
+    scenario: DebugScenario,
+    sizing: Sizing,
+) -> Result<DecisionSolve, Box<dyn Error>> {
+    let mut game = build_debug_flop_game(
+        scenario,
+        sizing,
+        scenario.ip_range.parse()?,
+        scenario.oop_range.parse()?,
+    )?;
+    game.allocate_memory(false);
+    solve(&mut game, SOLVE_ITERATIONS, 0.5, true);
+    move_to_ip_decision(&mut game)?;
+    extract_decision(
+        game,
+        DecisionMeta {
+            street: "flop",
+            board: scenario.board,
+            turn_card: "null",
+            flop_action: "null",
+            flop_bet_size: sizing.csv_size,
+            turn_bet_size: "null",
+        },
+    )
+}
+
+fn build_debug_flop_game(
+    scenario: DebugScenario,
+    sizing: Sizing,
+    ip_range: Range,
+    oop_range: Range,
+) -> Result<PostFlopGame, Box<dyn Error>> {
+    let card_config = CardConfig {
+        range: [oop_range, ip_range],
+        flop: flop_from_str(scenario.board)?,
+        turn: NOT_DEALT,
+        river: NOT_DEALT,
+    };
+    let tree_config = TreeConfig {
+        initial_state: BoardState::Flop,
+        starting_pot: STARTING_POT,
+        effective_stack: STARTING_STACK,
+        rake_rate: 0.0,
+        rake_cap: 0.0,
+        flop_bet_sizes: [
+            Default::default(),
+            BetSizeOptions::try_from((sizing.tree_size, ""))?,
+        ],
+        turn_bet_sizes: Default::default(),
+        river_bet_sizes: Default::default(),
+        turn_donk_sizes: None,
+        river_donk_sizes: None,
+        add_allin_threshold: 0.0,
+        force_allin_threshold: 0.0,
+        merging_threshold: 0.0,
+    };
+    Ok(PostFlopGame::with_config(
+        card_config,
+        ActionTree::new(tree_config)?,
+    )?)
+}
+
+fn export_debug_hand_row(
+    writer: &mut csv::Writer<std::fs::File>,
+    scenario: &DebugScenario,
+    solve: &DecisionSolve,
+) -> Result<(), Box<dyn Error>> {
+    let target_hand = (
+        parse_card(&scenario.hand[0..2])?,
+        parse_card(&scenario.hand[2..4])?,
+    );
+    let hand = solve
+        .hands
+        .iter()
+        .find(|hand| {
+            hand.cards == target_hand
+                || hand.cards == (target_hand.1, target_hand.0)
+        })
+        .ok_or_else(|| {
+            format!(
+                "hero hand {} is not live/in range for {} on {}",
+                scenario.hand, scenario.spot_name, scenario.board
+            )
+        })?;
+    let board = parse_board(scenario.board)?.to_vec();
+    let values = row_values(solve, hand.index);
+    let hero_equity_vs_villain =
+        raw_equity_vs_villain(hand.cards, &solve.villains, &board);
+    let equity_with_draws = solve.hero_equities[hand.index];
+    let (blocks_value, blocks_fold) =
+        blocker_totals(hand.cards, &solve.villain_weights);
+    let raw_strength_score = raw_strength_score(hero_equity_vs_villain);
+    let improvability_score =
+        improvability_score(equity_with_draws - hero_equity_vs_villain);
+    let range_advantage_score =
+        range_advantage_score(solve.range_stats.range_equity_hero);
+    let nut_advantage_score =
+        nut_advantage_score(solve.range_stats.nut_advantage_pct);
+
+    writer.write_record([
+        format!("{}-{}", scenario.spot_name, sizing_suffix(solve)),
+        "flop".to_string(),
+        hand.label.clone(),
+        scenario.board.to_string(),
+        scenario.hero_position.to_string(),
+        scenario.villain_position.to_string(),
+        "ip".to_string(),
+        "srp".to_string(),
+        solve.meta.flop_bet_size.to_string(),
+        format_float(values.check_freq),
+        format_float(values.check_ev),
+        solve.meta.flop_bet_size.to_string(),
+        format_float(values.bet_freq),
+        format_float(values.bet_ev),
+        values.best_action.to_string(),
+        format_float(values.ev),
+        format_float(hero_equity_vs_villain),
+        format_float(equity_with_draws),
+        raw_strength_score.to_string(),
+        improvability_score.to_string(),
+        format_float(solve.range_stats.range_equity_hero),
+        range_advantage_score.to_string(),
+        format_float(solve.range_stats.hero_weighted_value_combos),
+        format_float(solve.range_stats.villain_weighted_value_combos),
+        format_float(solve.range_stats.hero_total_live_combos),
+        format_float(solve.range_stats.villain_total_live_combos),
+        format_float(solve.range_stats.hero_weighted_value_pct),
+        format_float(solve.range_stats.villain_weighted_value_pct),
+        format_float(solve.range_stats.nut_advantage_pct),
+        nut_advantage_score.to_string(),
+        format_float(solve.range_stats.villain_weighted_fold_combos),
+        format_float(blocks_value),
+        format_float(blocks_fold),
+    ])?;
+    Ok(())
+}
+
+fn sizing_suffix(solve: &DecisionSolve) -> &'static str {
+    match solve.meta.flop_bet_size {
+        "0.33" => "33",
+        "0.75" => "75",
+        "1.25" => "125",
+        _ => "unknown",
+    }
+}
+
+fn write_debug_header(
+    writer: &mut csv::Writer<std::fs::File>,
+) -> Result<(), Box<dyn Error>> {
+    writer.write_record([
+        "spot_name",
+        "street",
+        "hand",
+        "board",
+        "hero_position",
+        "villain_position",
+        "player_type",
+        "pot_type",
+        "flop_bet_size",
+        "check_freq",
+        "check_ev",
+        "bet_1_size",
+        "bet_1_freq",
+        "bet_1_ev",
+        "best_action",
+        "ev",
+        "hero_equity_vs_villain",
+        "equity_with_draws",
+        "raw_strength_score",
+        "improvability_score",
+        "range_equity_hero",
+        "range_advantage_score",
+        "hero_weighted_value_combos",
+        "villain_weighted_value_combos",
+        "hero_total_live_combos",
+        "villain_total_live_combos",
+        "hero_weighted_value_pct",
+        "villain_weighted_value_pct",
+        "nut_advantage_pct",
+        "nut_advantage_score",
+        "villain_weighted_fold_combos",
+        "hero_blocks_value_combos",
+        "hero_blocks_fold_combos",
+    ])?;
     Ok(())
 }
 
@@ -924,6 +1051,83 @@ fn value_weight(equity: f32) -> f32 {
     } else {
         0.0
     }
+}
+
+fn raw_strength_score(equity: f32) -> u8 {
+    score_from_thresholds(
+        equity * 100.0,
+        &[
+            (92.0, 10),
+            (83.0, 9),
+            (73.0, 8),
+            (62.0, 7),
+            (50.0, 6),
+            (38.0, 5),
+            (27.0, 4),
+            (17.0, 3),
+            (8.0, 2),
+        ],
+    )
+}
+
+fn improvability_score(delta: f32) -> u8 {
+    score_from_thresholds(
+        delta * 100.0,
+        &[
+            (32.0, 10),
+            (26.0, 9),
+            (20.0, 8),
+            (15.0, 7),
+            (10.0, 6),
+            (5.0, 5),
+            (0.0, 4),
+            (-4.0, 3),
+            (-10.0, 2),
+        ],
+    )
+}
+
+fn range_advantage_score(range_equity: f32) -> u8 {
+    score_from_thresholds(
+        range_equity * 100.0,
+        &[
+            (68.0, 10),
+            (63.0, 9),
+            (58.0, 8),
+            (54.0, 7),
+            (50.0, 6),
+            (46.0, 5),
+            (42.0, 4),
+            (37.0, 3),
+            (32.0, 2),
+        ],
+    )
+}
+
+fn nut_advantage_score(nut_advantage: f32) -> u8 {
+    score_from_thresholds(
+        nut_advantage * 100.0,
+        &[
+            (8.0, 10),
+            (5.0, 9),
+            (3.0, 8),
+            (1.5, 7),
+            (0.0, 6),
+            (-1.5, 5),
+            (-3.0, 4),
+            (-5.0, 3),
+            (-8.0, 2),
+        ],
+    )
+}
+
+fn score_from_thresholds(value: f32, thresholds: &[(f32, u8)]) -> u8 {
+    for &(minimum, score) in thresholds {
+        if value >= minimum {
+            return score;
+        }
+    }
+    1
 }
 
 fn fold_weight(equity: f32) -> f32 {
