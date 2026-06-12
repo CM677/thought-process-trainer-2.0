@@ -1,7 +1,7 @@
 use postflop_solver::*;
 use std::error::Error;
 
-const OUTPUT_FILE: &str = "output_debug_two_ranges.csv";
+const OUTPUT_FILE: &str = "output_debug_20_ip_srp_ranges.csv";
 
 const OOP_PLAYER: usize = 0;
 const IP_PLAYER: usize = 1;
@@ -18,41 +18,250 @@ const BTN_RANGE: &str =
     "22+,A2s+,K2s+,Q2s+,A2o+,K7o+,Q9o+,J9o+,T9o,J4s+,T6s+,96s+,86s+,75s+,65s,54s";
 const BB_RANGE: &str = "99-22,AQs-A6s,KJs-K2s,J7s-J4s,T6s,97s-96s,87s-85s,75s-74s,64s-63s,53s,43s,AJo-A6o,K9o+,QTo+,JTo,QTs-Q2s,A4s-A2s,T9o";
 const UTG_RANGE: &str = "66+,A2s+,K6s+,QTs+,ATo+,KJo+,JTs,T9s,65s";
+const HJ_RANGE: &str = "55+,A2s+,K5s+,Q9s+,A9o+,KTo+,QTo+,J9s+,T8s+,65s";
+const CO_RANGE: &str =
+    "44+,A2s+,K3s+,Q6s+,A8o+,KTo+,QTo+,JTo,J8s+,T8s+,98s,78s,67s,65s,54s,A5o";
+const SB_RANGE: &str =
+    "22+,A2s+,K2s+,Q2s+,A2o+,K7o+,Q9o+,J9o+,T9o,J4s+,T6s+,96s+,85s+,75s+,64s+,53s+";
 const BB_VS_UTG_CALL_RANGE: &str = "JJ-22,AQs-A6s,KQs-K8s,QTs-Q9s,JTs-J9s,T9s-T8s,98s-97s,87s-86s,76s-75s,64s,54s-53s,AQo-AJo,KQo,A2s";
+const BB_VS_HJ_CALL_RANGE: &str = "JJ-22,AQs-A6s,KTs-K8s,Q9s,J9s-J8s,T8s-T7s,98s-97s,87s-86s,76s-75s,64s,54s-53s,AQo-ATo,KJo+,K6s-K5s,KQo,43s,QJo,A2s";
+const BB_VS_CO_CALL_RANGE: &str = "TT-22,AJs-A6s,K9s-K8s,JTs-J8s,T8s-T7s,98s-96s,87s-85s,75s,64s,54s-53s,AQo-ATo,KTo+,K6s-K2s,QTo+,JTo,Q8s-Q6s,A2s,43s";
+const BB_VS_SB_CALL_RANGE: &str = "99-22,AJs-A6s,KJs-K2s,J9s-J6s,T8s-T6s,97s-95s,87s-85s,75s-74s,64s-63s,53s-52s,43s,AJo-A6o,K9o+,K6s-K2s,Q9o+,JTo,QJs-Q2s,A4s-A2s,T9o,98o";
 
-const DEBUG_SCENARIOS: [DebugScenario; 2] = [
+const DEBUG_SCENARIOS: [DebugScenario; 20] = [
     DebugScenario {
-        log_name: "BTN vs BB on 3s4s5c",
-        spot_name: "btn-vs-bb-srp-debug-range",
+        spot_id: 1,
         hero_position: "BTN",
         villain_position: "BB",
         reference_hand: "Kh4h",
         board: "3s4s5c",
-        ip_range: BTN_RANGE,
-        oop_range: BB_RANGE,
+        full_board: "3s4s5c6d2h",
+        ip_range: Some(BTN_RANGE),
+        oop_range: Some(BB_RANGE),
+        missing_range_key: None,
     },
     DebugScenario {
-        log_name: "UTG vs BB on Ad7d4h",
-        spot_name: "utg-vs-bb-srp-debug-range",
+        spot_id: 2,
         hero_position: "UTG",
         villain_position: "BB",
         reference_hand: "Ah6h",
         board: "Ad7d4h",
-        ip_range: UTG_RANGE,
-        oop_range: BB_VS_UTG_CALL_RANGE,
+        full_board: "Ad7d4h2d4c",
+        ip_range: Some(UTG_RANGE),
+        oop_range: Some(BB_VS_UTG_CALL_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 7,
+        hero_position: "CO",
+        villain_position: "BB",
+        reference_hand: "AhTs",
+        board: "7d8h4c",
+        full_board: "7d8h4c2sQh",
+        ip_range: Some(CO_RANGE),
+        oop_range: Some(BB_VS_CO_CALL_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 14,
+        hero_position: "CO",
+        villain_position: "BB",
+        reference_hand: "AsQh",
+        board: "Jd2d8d",
+        full_board: "Jd2d8d4c4d",
+        ip_range: Some(CO_RANGE),
+        oop_range: Some(BB_VS_CO_CALL_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 17,
+        hero_position: "BTN",
+        villain_position: "BB",
+        reference_hand: "Ks9d",
+        board: "3hKdAh",
+        full_board: "3hKdAh4hQc",
+        ip_range: Some(BTN_RANGE),
+        oop_range: Some(BB_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 21,
+        hero_position: "BTN",
+        villain_position: "SB",
+        reference_hand: "5s4s",
+        board: "9s4h2h",
+        full_board: "9s4h2h4dAd",
+        ip_range: Some(BTN_RANGE),
+        oop_range: None,
+        missing_range_key: Some("SB vs BTN Open call"),
+    },
+    DebugScenario {
+        spot_id: 24,
+        hero_position: "UTG",
+        villain_position: "BB",
+        reference_hand: "Tc9c",
+        board: "5h7s9d",
+        full_board: "5h7s9d8c9h",
+        ip_range: Some(UTG_RANGE),
+        oop_range: Some(BB_VS_UTG_CALL_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 29,
+        hero_position: "BTN",
+        villain_position: "BB",
+        reference_hand: "Qc5c",
+        board: "Jh4h8d",
+        full_board: "Jh4h8d8hJs",
+        ip_range: Some(BTN_RANGE),
+        oop_range: Some(BB_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 32,
+        hero_position: "BTN",
+        villain_position: "BB",
+        reference_hand: "Ah4d",
+        board: "4s2s2d",
+        full_board: "4s2s2dKhJs",
+        ip_range: Some(BTN_RANGE),
+        oop_range: Some(BB_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 33,
+        hero_position: "BB",
+        villain_position: "SB",
+        reference_hand: "Kd3d",
+        board: "JhAdQs",
+        full_board: "JhAdQsAs2c",
+        ip_range: Some(BB_VS_SB_CALL_RANGE),
+        oop_range: Some(SB_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 39,
+        hero_position: "UTG",
+        villain_position: "BB",
+        reference_hand: "JcTc",
+        board: "KdAd4d",
+        full_board: "KdAd4dJd9s",
+        ip_range: Some(UTG_RANGE),
+        oop_range: Some(BB_VS_UTG_CALL_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 41,
+        hero_position: "UTG",
+        villain_position: "BB",
+        reference_hand: "QcTc",
+        board: "AcAs4c",
+        full_board: "AcAs4c2c3s",
+        ip_range: Some(UTG_RANGE),
+        oop_range: Some(BB_VS_UTG_CALL_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 45,
+        hero_position: "HJ",
+        villain_position: "UTG",
+        reference_hand: "AdJd",
+        board: "4sKcKh",
+        full_board: "4sKcKh2h8h",
+        ip_range: Some(HJ_RANGE),
+        oop_range: None,
+        missing_range_key: Some("UTG vs HJ Open call"),
+    },
+    DebugScenario {
+        spot_id: 46,
+        hero_position: "CO",
+        villain_position: "BB",
+        reference_hand: "7d8d",
+        board: "JsThKh",
+        full_board: "JsThKh8sAs",
+        ip_range: Some(CO_RANGE),
+        oop_range: Some(BB_VS_CO_CALL_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 49,
+        hero_position: "HJ",
+        villain_position: "SB",
+        reference_hand: "KdTs",
+        board: "KcQc8d",
+        full_board: "KcQc8d7cJd",
+        ip_range: Some(HJ_RANGE),
+        oop_range: None,
+        missing_range_key: Some("SB vs HJ Open call"),
+    },
+    DebugScenario {
+        spot_id: 55,
+        hero_position: "BTN",
+        villain_position: "BB",
+        reference_hand: "9d8d",
+        board: "Td9hAd",
+        full_board: "Td9hAdQh4d",
+        ip_range: Some(BTN_RANGE),
+        oop_range: Some(BB_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 60,
+        hero_position: "BTN",
+        villain_position: "SB",
+        reference_hand: "7d5d",
+        board: "Td4c3h",
+        full_board: "Td4c3h3dTc",
+        ip_range: Some(BTN_RANGE),
+        oop_range: None,
+        missing_range_key: Some("SB vs BTN Open call"),
+    },
+    DebugScenario {
+        spot_id: 62,
+        hero_position: "CO",
+        villain_position: "BB",
+        reference_hand: "8s8c",
+        board: "Qc5sKh",
+        full_board: "Qc5sKhKcTd",
+        ip_range: Some(CO_RANGE),
+        oop_range: Some(BB_VS_CO_CALL_RANGE),
+        missing_range_key: None,
+    },
+    DebugScenario {
+        spot_id: 64,
+        hero_position: "CO",
+        villain_position: "SB",
+        reference_hand: "KdTs",
+        board: "5dAsTh",
+        full_board: "5dAsTh8cJd",
+        ip_range: Some(CO_RANGE),
+        oop_range: None,
+        missing_range_key: Some("SB vs CO Open call"),
+    },
+    DebugScenario {
+        spot_id: 66,
+        hero_position: "BTN",
+        villain_position: "BB",
+        reference_hand: "7h7c",
+        board: "2s8d7s",
+        full_board: "2s8d7s9hKc",
+        ip_range: Some(BTN_RANGE),
+        oop_range: Some(BB_RANGE),
+        missing_range_key: None,
     },
 ];
 
 #[derive(Clone, Copy)]
 struct DebugScenario {
-    log_name: &'static str,
-    spot_name: &'static str,
+    spot_id: u32,
     hero_position: &'static str,
     villain_position: &'static str,
     reference_hand: &'static str,
     board: &'static str,
-    ip_range: &'static str,
-    oop_range: &'static str,
+    full_board: &'static str,
+    ip_range: Option<&'static str>,
+    oop_range: Option<&'static str>,
+    missing_range_key: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -131,69 +340,86 @@ enum ModalAction {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let flop_sizings = [
-        Sizing {
-            tree_size: "33%",
-            csv_size: "0.33",
-            suffix: "33",
-        },
-        Sizing {
-            tree_size: "75%",
-            csv_size: "0.75",
-            suffix: "75",
-        },
-        Sizing {
-            tree_size: "125%",
-            csv_size: "1.25",
-            suffix: "125",
-        },
-    ];
+    let sizing = Sizing {
+        tree_size: "125%",
+        csv_size: "1.25",
+        suffix: "125",
+    };
 
+    println!("Running 20 IP SRP debug range scenarios...");
     let mut writer = csv::Writer::from_path(OUTPUT_FILE)?;
     write_debug_header(&mut writer)?;
     let mut total_rows = 0usize;
+    let mut skipped_scenarios = 0usize;
     for (scenario_index, scenario) in DEBUG_SCENARIOS.iter().enumerate() {
         println!(
-            "Running debug range scenario {}: {}",
+            "Scenario {}/20: Spot {} {} vs {} board {}",
             scenario_index + 1,
-            scenario.log_name
+            scenario.spot_id,
+            scenario.hero_position,
+            scenario.villain_position,
+            scenario.board
         );
-        let (total_combos, live_combos) = hero_range_combo_counts(scenario)?;
+
+        if let Some(missing_key) = scenario.missing_range_key {
+            eprintln!(
+                "Skipping scenario {} (Spot {}): missing range key: {}",
+                scenario_index + 1,
+                scenario.spot_id,
+                missing_key
+            );
+            skipped_scenarios += 1;
+            continue;
+        }
+
+        let (total_combos, live_combos) = match hero_range_combo_counts(scenario) {
+            Ok(counts) => counts,
+            Err(error) => {
+                eprintln!(
+                    "Skipping scenario {} (Spot {}): failed to enumerate hero range: {error}",
+                    scenario_index + 1,
+                    scenario.spot_id
+                );
+                skipped_scenarios += 1;
+                continue;
+            }
+        };
         let skipped_board_combos = total_combos.saturating_sub(live_combos);
         println!(
             "Skipped {skipped_board_combos} combos because they contained board cards."
         );
-        let mut scenario_rows = 0usize;
 
-        for sizing in flop_sizings {
-            println!(
-                "Solving {} range at {} pot",
-                scenario.hero_position, sizing.tree_size
-            );
-            match solve_debug_scenario(*scenario, sizing) {
-                Ok(solve) => {
-                    let rows = export_debug_range_rows(&mut writer, scenario, &solve)?;
-                    scenario_rows += rows;
-                    total_rows += rows;
-                }
-                Err(error) => {
-                    eprintln!(
-                        "Debug scenario {} failed at {}: {error}",
-                        scenario_index + 1,
-                        sizing.tree_size
-                    );
-                    return Err(error);
-                }
+        println!(
+            "Solving {} range at {} pot",
+            scenario.hero_position, sizing.tree_size
+        );
+        match solve_debug_scenario(*scenario, sizing) {
+            Ok(solve) => {
+                let rows = export_debug_range_rows(
+                    &mut writer,
+                    scenario_index + 1,
+                    scenario,
+                    &solve,
+                )?;
+                total_rows += rows;
+                println!("Hero range combos exported: {rows}");
+            }
+            Err(error) => {
+                eprintln!(
+                    "Skipping scenario {} (Spot {}): solve failed at {}: {error}",
+                    scenario_index + 1,
+                    scenario.spot_id,
+                    sizing.tree_size
+                );
+                skipped_scenarios += 1;
             }
         }
-        println!("Hero range combos exported: {live_combos}");
-        println!("Scenario rows written: {scenario_rows}");
     }
 
     writer.flush()?;
     println!("Writing {OUTPUT_FILE}");
-    println!("Done. Written {total_rows} rows to {OUTPUT_FILE}");
-    println!("Done.");
+    println!("Done. Rows written: {total_rows}");
+    println!("Skipped scenarios: {skipped_scenarios}");
     Ok(())
 }
 
@@ -201,8 +427,14 @@ fn solve_debug_scenario(
     scenario: DebugScenario,
     sizing: Sizing,
 ) -> Result<DecisionSolve, Box<dyn Error>> {
-    let ip_range = normalize_range_for_solver(scenario.ip_range).parse()?;
-    let oop_range = normalize_range_for_solver(scenario.oop_range).parse()?;
+    let ip_range_text = scenario
+        .ip_range
+        .ok_or_else(|| format!("missing hero range for Spot {}", scenario.spot_id))?;
+    let oop_range_text = scenario
+        .oop_range
+        .ok_or_else(|| format!("missing villain range for Spot {}", scenario.spot_id))?;
+    let ip_range = normalize_range_for_solver(ip_range_text).parse()?;
+    let oop_range = normalize_range_for_solver(oop_range_text).parse()?;
     let mut game = build_debug_flop_game(
         scenario,
         sizing,
@@ -264,7 +496,10 @@ fn build_debug_flop_game(
 fn hero_range_combo_counts(
     scenario: &DebugScenario,
 ) -> Result<(usize, usize), Box<dyn Error>> {
-    let range: Range = normalize_range_for_solver(scenario.ip_range).parse()?;
+    let range_text = scenario
+        .ip_range
+        .ok_or_else(|| format!("missing hero range for Spot {}", scenario.spot_id))?;
+    let range: Range = normalize_range_for_solver(range_text).parse()?;
     let (all_combos, _) = range.get_hands_weights(0);
     let dead_cards_mask = parse_board(scenario.board)?
         .into_iter()
@@ -327,12 +562,13 @@ fn rank_value(rank: char) -> u8 {
 
 fn export_debug_range_rows(
     writer: &mut csv::Writer<std::fs::File>,
+    scenario_id: usize,
     scenario: &DebugScenario,
     solve: &DecisionSolve,
 ) -> Result<usize, Box<dyn Error>> {
     let board = parse_board(scenario.board)?.to_vec();
     for hand in &solve.hands {
-        write_debug_row(writer, scenario, solve, hand, &board)?;
+        write_debug_row(writer, scenario_id, scenario, solve, hand, &board)?;
     }
     Ok(solve.hands.len())
 }
@@ -356,16 +592,17 @@ fn export_debug_hand_row(
         })
         .ok_or_else(|| {
             format!(
-                "hero hand {} is not live/in range for {} on {}",
-                scenario.reference_hand, scenario.spot_name, scenario.board
+                "hero hand {} is not live/in range for Spot {} on {}",
+                scenario.reference_hand, scenario.spot_id, scenario.board
             )
         })?;
     let board = parse_board(scenario.board)?.to_vec();
-    write_debug_row(writer, scenario, solve, hand, &board)
+    write_debug_row(writer, 0, scenario, solve, hand, &board)
 }
 
 fn write_debug_row(
     writer: &mut csv::Writer<std::fs::File>,
+    scenario_id: usize,
     scenario: &DebugScenario,
     solve: &DecisionSolve,
     hand: &HandCombo,
@@ -386,10 +623,20 @@ fn write_debug_row(
         nut_advantage_score(solve.range_stats.nut_advantage_pct);
 
     writer.write_record([
-        format!("{}-{}", scenario.spot_name, sizing_suffix(solve)),
+        scenario_id.to_string(),
+        scenario.spot_id.to_string(),
+        format!(
+            "{}-vs-{}-srp-spot-{}-debug-range-{}",
+            scenario.hero_position.to_lowercase(),
+            scenario.villain_position.to_lowercase(),
+            scenario.spot_id,
+            sizing_suffix(solve)
+        ),
         "flop".to_string(),
         hand.label.clone(),
         scenario.board.to_string(),
+        scenario.full_board.to_string(),
+        scenario.reference_hand.to_string(),
         scenario.hero_position.to_string(),
         scenario.villain_position.to_string(),
         "ip".to_string(),
@@ -436,10 +683,14 @@ fn write_debug_header(
     writer: &mut csv::Writer<std::fs::File>,
 ) -> Result<(), Box<dyn Error>> {
     writer.write_record([
+        "scenario_id",
+        "spot_id",
         "spot_name",
         "street",
         "hand",
         "board",
+        "full_board",
+        "original_input_hand",
         "hero_position",
         "villain_position",
         "player_type",
