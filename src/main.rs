@@ -477,6 +477,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     ];
 
     println!("Running 20 IP SRP debug range scenarios...");
+    println!(
+        "Scoring config: raw strength brackets = 0-8,8-17,17-27,27-38,38-50,50-62,62-73,73-83,83-92,92-100."
+    );
+    println!("Nut advantage thresholds = 80/90.");
+    println!("Blockers-to-value thresholds = 70/85.");
     let mut writer = csv::Writer::from_path(OUTPUT_FILE)?;
     write_debug_header(&mut writer)?;
     let mut total_rows = 0usize;
@@ -1507,8 +1512,17 @@ fn calculate_range_stats(
     hero_count: usize,
     villain_count: usize,
 ) -> RangeStats {
-    let hero_weighted_value_combos = hero_equities.iter().take(hero_count).map(|&eq| value_weight(eq)).sum();
-    let villain_weighted_value_combos = villain_equities.iter().take(villain_count).map(|&eq| value_weight(eq)).sum();
+    // Nut advantage uses strict thresholds: 80-90% = 0.5, 90%+ = 1.0.
+    let hero_weighted_value_combos = hero_equities
+        .iter()
+        .take(hero_count)
+        .map(|&equity| nut_weight_from_equity(equity))
+        .sum();
+    let villain_weighted_value_combos = villain_equities
+        .iter()
+        .take(villain_count)
+        .map(|&equity| nut_weight_from_equity(equity))
+        .sum();
     let villain_weighted_fold_combos = villain_equities.iter().take(villain_count).map(|&eq| fold_weight(eq)).sum();
     let hero_total_live_combos = hero_count as f32;
     let villain_total_live_combos = villain_count as f32;
@@ -1547,13 +1561,25 @@ fn villain_weighted_combos(villains: &[HandCombo], equities: &[f32]) -> Vec<Weig
         .iter()
         .map(|combo| WeightedCombo {
             cards: combo.cards,
-            value_weight: value_weight(equities[combo.index]),
+            // Blockers to value intentionally uses broader thresholds:
+            // 70-85% = 0.5, 85%+ = 1.0.
+            value_weight: blocker_value_weight_from_equity(equities[combo.index]),
             fold_weight: fold_weight(equities[combo.index]),
         })
         .collect()
 }
 
-fn value_weight(equity: f32) -> f32 {
+fn nut_weight_from_equity(equity: f32) -> f32 {
+    if equity >= 0.90 {
+        1.0
+    } else if equity >= 0.80 {
+        0.5
+    } else {
+        0.0
+    }
+}
+
+fn blocker_value_weight_from_equity(equity: f32) -> f32 {
     if equity >= 0.85 {
         1.0
     } else if equity >= 0.70 {
