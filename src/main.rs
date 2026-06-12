@@ -1,7 +1,7 @@
 use postflop_solver::*;
 use std::error::Error;
 
-const OUTPUT_FILE: &str = "output_debug_two_spots.csv";
+const OUTPUT_FILE: &str = "output_debug_two_ranges.csv";
 
 const OOP_PLAYER: usize = 0;
 const IP_PLAYER: usize = 1;
@@ -22,21 +22,21 @@ const BB_VS_UTG_CALL_RANGE: &str = "JJ-22,AQs-A6s,KQs-K8s,QTs-Q9s,JTs-J9s,T9s-T8
 
 const DEBUG_SCENARIOS: [DebugScenario; 2] = [
     DebugScenario {
-        log_name: "existing Kh4h spot",
-        spot_name: "btn-vs-bb-srp-debug-kh4h",
+        log_name: "BTN vs BB on 3s4s5c",
+        spot_name: "btn-vs-bb-srp-debug-range",
         hero_position: "BTN",
         villain_position: "BB",
-        hand: "Kh4h",
+        reference_hand: "Kh4h",
         board: "3s4s5c",
         ip_range: BTN_RANGE,
         oop_range: BB_RANGE,
     },
     DebugScenario {
-        log_name: "UTG vs BB Ah6h on Ad7d4h",
-        spot_name: "utg-vs-bb-srp-debug-ah6h",
+        log_name: "UTG vs BB on Ad7d4h",
+        spot_name: "utg-vs-bb-srp-debug-range",
         hero_position: "UTG",
         villain_position: "BB",
-        hand: "Ah6h",
+        reference_hand: "Ah6h",
         board: "Ad7d4h",
         ip_range: UTG_RANGE,
         oop_range: BB_VS_UTG_CALL_RANGE,
@@ -49,7 +49,7 @@ struct DebugScenario {
     spot_name: &'static str,
     hero_position: &'static str,
     villain_position: &'static str,
-    hand: &'static str,
+    reference_hand: &'static str,
     board: &'static str,
     ip_range: &'static str,
     oop_range: &'static str,
@@ -131,7 +131,6 @@ enum ModalAction {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    println!("Writing {OUTPUT_FILE}");
     let flop_sizings = [
         Sizing {
             tree_size: "33%",
@@ -155,19 +154,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut total_rows = 0usize;
     for (scenario_index, scenario) in DEBUG_SCENARIOS.iter().enumerate() {
         println!(
-            "Running debug scenario {}: {}",
+            "Running debug range scenario {}: {}",
             scenario_index + 1,
             scenario.log_name
         );
+        let (total_combos, live_combos) = hero_range_combo_counts(scenario)?;
+        let skipped_board_combos = total_combos.saturating_sub(live_combos);
+        println!(
+            "Skipped {skipped_board_combos} combos because they contained board cards."
+        );
+        let mut scenario_rows = 0usize;
+
         for sizing in flop_sizings {
             println!(
-                "Solving {} at {} pot",
-                scenario.hand, sizing.tree_size
+                "Solving {} range at {} pot",
+                scenario.hero_position, sizing.tree_size
             );
             match solve_debug_scenario(*scenario, sizing) {
                 Ok(solve) => {
-                    export_debug_hand_row(&mut writer, scenario, &solve)?;
-                    total_rows += 1;
+                    let rows = export_debug_range_rows(&mut writer, scenario, &solve)?;
+                    scenario_rows += rows;
+                    total_rows += rows;
                 }
                 Err(error) => {
                     eprintln!(
@@ -179,6 +186,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+        println!("Hero range combos exported: {live_combos}");
+        println!("Scenario rows written: {scenario_rows}");
     }
 
     writer.flush()?;
@@ -192,11 +201,13 @@ fn solve_debug_scenario(
     scenario: DebugScenario,
     sizing: Sizing,
 ) -> Result<DecisionSolve, Box<dyn Error>> {
+    let ip_range = normalize_range_for_solver(scenario.ip_range).parse()?;
+    let oop_range = normalize_range_for_solver(scenario.oop_range).parse()?;
     let mut game = build_debug_flop_game(
         scenario,
         sizing,
-        scenario.ip_range.parse()?,
-        scenario.oop_range.parse()?,
+        ip_range,
+        oop_range,
     )?;
     game.allocate_memory(false);
     solve(&mut game, SOLVE_ITERATIONS, 0.5, true);
@@ -250,14 +261,91 @@ fn build_debug_flop_game(
     )?)
 }
 
+fn hero_range_combo_counts(
+    scenario: &DebugScenario,
+) -> Result<(usize, usize), Box<dyn Error>> {
+    let range: Range = normalize_range_for_solver(scenario.ip_range).parse()?;
+    let (all_combos, _) = range.get_hands_weights(0);
+    let dead_cards_mask = parse_board(scenario.board)?
+        .into_iter()
+        .fold(0u64, |mask, card| mask | (1u64 << card));
+    let (live_combos, _) = range.get_hands_weights(dead_cards_mask);
+    Ok((all_combos.len(), live_combos.len()))
+}
+
+fn normalize_range_for_solver(range: &str) -> String {
+    range
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(normalize_range_token)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn normalize_range_token(token: &str) -> String {
+    if let Some((first, second)) = token.split_once('-') {
+        return format!(
+            "{}-{}",
+            normalize_hand_class(first),
+            normalize_hand_class(second)
+        );
+    }
+
+    let suffix = token.strip_suffix('+').map(|_| "+").unwrap_or("");
+    let class = token.strip_suffix('+').unwrap_or(token);
+    format!("{}{}", normalize_hand_class(class), suffix)
+}
+
+fn normalize_hand_class(class: &str) -> String {
+    let bytes = class.as_bytes();
+    if bytes.len() < 2 {
+        return class.to_string();
+    }
+
+    let first = bytes[0] as char;
+    let second = bytes[1] as char;
+    if rank_value(first) >= rank_value(second) {
+        return class.to_string();
+    }
+
+    let suffix = &class[2..];
+    format!("{second}{first}{suffix}")
+}
+
+fn rank_value(rank: char) -> u8 {
+    match rank {
+        '2'..='9' => rank as u8 - b'0',
+        'T' => 10,
+        'J' => 11,
+        'Q' => 12,
+        'K' => 13,
+        'A' => 14,
+        _ => 0,
+    }
+}
+
+fn export_debug_range_rows(
+    writer: &mut csv::Writer<std::fs::File>,
+    scenario: &DebugScenario,
+    solve: &DecisionSolve,
+) -> Result<usize, Box<dyn Error>> {
+    let board = parse_board(scenario.board)?.to_vec();
+    for hand in &solve.hands {
+        write_debug_row(writer, scenario, solve, hand, &board)?;
+    }
+    Ok(solve.hands.len())
+}
+
+#[allow(dead_code)]
 fn export_debug_hand_row(
     writer: &mut csv::Writer<std::fs::File>,
     scenario: &DebugScenario,
     solve: &DecisionSolve,
 ) -> Result<(), Box<dyn Error>> {
     let target_hand = (
-        parse_card(&scenario.hand[0..2])?,
-        parse_card(&scenario.hand[2..4])?,
+        parse_card(&scenario.reference_hand[0..2])?,
+        parse_card(&scenario.reference_hand[2..4])?,
     );
     let hand = solve
         .hands
@@ -269,13 +357,23 @@ fn export_debug_hand_row(
         .ok_or_else(|| {
             format!(
                 "hero hand {} is not live/in range for {} on {}",
-                scenario.hand, scenario.spot_name, scenario.board
+                scenario.reference_hand, scenario.spot_name, scenario.board
             )
         })?;
     let board = parse_board(scenario.board)?.to_vec();
+    write_debug_row(writer, scenario, solve, hand, &board)
+}
+
+fn write_debug_row(
+    writer: &mut csv::Writer<std::fs::File>,
+    scenario: &DebugScenario,
+    solve: &DecisionSolve,
+    hand: &HandCombo,
+    board: &[Card],
+) -> Result<(), Box<dyn Error>> {
     let values = row_values(solve, hand.index);
     let hero_equity_vs_villain =
-        raw_equity_vs_villain(hand.cards, &solve.villains, &board);
+        raw_equity_vs_villain(hand.cards, &solve.villains, board);
     let equity_with_draws = solve.hero_equities[hand.index];
     let (blocks_value, blocks_fold) =
         blocker_totals(hand.cards, &solve.villain_weights);
