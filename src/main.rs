@@ -1,7 +1,7 @@
 use postflop_solver::*;
 use std::error::Error;
 
-const OUTPUT_FILE: &str = "output_debug_20_ip_srp_ranges.csv";
+const OUTPUT_FILE: &str = "output_debug_100_ip_srp_ranges.csv";
 
 const OOP_PLAYER: usize = 0;
 const IP_PLAYER: usize = 1;
@@ -32,6 +32,8 @@ const SB_VS_BTN_CALL_RANGE: &str = "66-22,A7s-A2s,K9s-K2s,QTs-Q2s,JTs-J4s,T9s-T6
 const SB_VS_CO_CALL_RANGE: &str = "88-22,ATs-A2s,KTs-K2s,QTs-Q6s,JTs-J8s,T9s-T8s,98s,87s,76s,65s,AQo-ATo,KQo-KTo,QJo-QTo,JTo";
 const SB_VS_HJ_CALL_RANGE: &str = "99-22,ATs-A2s,KTs-K5s,QTs-Q9s,JTs,T9s,98s,87s,76s,65s,AQo-ATo,KQo-KTo,QJo";
 const UTG_VS_HJ_CALL_RANGE: &str = "99-66,AQs-ATs,KQs-KJs,QJs,JTs,T9s,65s,AQo";
+const BTN_VS_UTG_CALL_RANGE: &str = "JJ-77,AQs-A9s,QTs,AQo,KJs,KQs";
+const BTN_VS_HJ_CALL_RANGE: &str = "JJ-66,AQs-A9s,QTs,AQo,KJs,KQs";
 
 // Central registry retained for upcoming SRP, 3-bet, 4-bet, and 5-bet exporters.
 // The current 20-spot runner uses the named constants above for its active range pairs.
@@ -46,9 +48,9 @@ const PREFLOP_RANGE_REGISTRY: &[(&str, &str)] = &[
     ("CO vs UTG Open 3bet", "88+,ATs+,KTs+,AQo+,65s,A4s-A5s"),
     ("CO vs HJ Open 3bet", "88+,ATs+,KTs+,AQo+,KQo,QJs,65s,A3s-A5s"),
     ("BTN vs UTG Open 3bet", "QQ+,AKs,AKo,KQo,QJs,JTs,T9s,K9s-KTs,A8s,A3s-A5s,65s"),
-    ("BTN vs UTG Open call", "77-JJ,A9s-AQs,QTs,AQo,KJs,KQs"),
+    ("BTN vs UTG Open call", BTN_VS_UTG_CALL_RANGE),
     ("BTN vs HJ Open 3bet", "QQ+,AKs,AKo,KQo,QJs,JTs,T9s,K9s-KTs,A3s-A8s,65s,76s,AJo"),
-    ("BTN vs HJ Open call", "66-JJ,A9s-AQs,QTs,AQo,KJs,KQs"),
+    ("BTN vs HJ Open call", BTN_VS_HJ_CALL_RANGE),
     ("BTN vs CO Open 3bet", "QQ+,AKs,AKo,KQo,QJs,J9s+,T9s,K8s-K9s,A2s-A3s,A5s-A7s,65s,76s,AJo-ATo,Q9s"),
     ("BTN vs CO Open call", "55-JJ,A8s-AQs,QTs,AQo,A4s,KTs+"),
     ("SB vs UTG Open 3bet", "TT+,ATs+,KTs+,QJs,AKo,A5s,65s"),
@@ -146,7 +148,8 @@ const PREFLOP_RANGE_REGISTRY: &[(&str, &str)] = &[
     ("SB vs BB 5bet Shove Defense call", "JJ+,AKo,AKs"),
 ];
 
-const DEBUG_SCENARIOS: [DebugScenario; 20] = [
+#[allow(dead_code)]
+const DEBUG_SCENARIOS_20: [DebugScenario; 20] = [
     DebugScenario {
         spot_id: 1,
         hero_position: "BTN",
@@ -369,6 +372,133 @@ const DEBUG_SCENARIOS: [DebugScenario; 20] = [
     },
 ];
 
+macro_rules! debug_scenario {
+    ($spot:literal, "UTG", "BB", $hand:literal, $board:literal, $full:literal) => {
+        DebugScenario { spot_id: $spot, hero_position: "UTG", villain_position: "BB", reference_hand: $hand, board: $board, full_board: $full, ip_range: Some(UTG_RANGE), oop_range: Some(BB_VS_UTG_CALL_RANGE), missing_range_key: None }
+    };
+    ($spot:literal, "HJ", "BB", $hand:literal, $board:literal, $full:literal) => {
+        DebugScenario { spot_id: $spot, hero_position: "HJ", villain_position: "BB", reference_hand: $hand, board: $board, full_board: $full, ip_range: Some(HJ_RANGE), oop_range: Some(BB_VS_HJ_CALL_RANGE), missing_range_key: None }
+    };
+    ($spot:literal, "CO", "BB", $hand:literal, $board:literal, $full:literal) => {
+        DebugScenario { spot_id: $spot, hero_position: "CO", villain_position: "BB", reference_hand: $hand, board: $board, full_board: $full, ip_range: Some(CO_RANGE), oop_range: Some(BB_VS_CO_CALL_RANGE), missing_range_key: None }
+    };
+    ($spot:literal, "BTN", "BB", $hand:literal, $board:literal, $full:literal) => {
+        DebugScenario { spot_id: $spot, hero_position: "BTN", villain_position: "BB", reference_hand: $hand, board: $board, full_board: $full, ip_range: Some(BTN_RANGE), oop_range: Some(BB_RANGE), missing_range_key: None }
+    };
+    ($spot:literal, "BB", "SB", $hand:literal, $board:literal, $full:literal) => {
+        DebugScenario { spot_id: $spot, hero_position: "BB", villain_position: "SB", reference_hand: $hand, board: $board, full_board: $full, ip_range: Some(BB_VS_SB_CALL_RANGE), oop_range: Some(SB_RANGE), missing_range_key: None }
+    };
+    ($spot:literal, "BTN", "UTG", $hand:literal, $board:literal, $full:literal) => {
+        DebugScenario { spot_id: $spot, hero_position: "BTN", villain_position: "UTG", reference_hand: $hand, board: $board, full_board: $full, ip_range: Some(BTN_VS_UTG_CALL_RANGE), oop_range: Some(UTG_RANGE), missing_range_key: None }
+    };
+    ($spot:literal, "BTN", "HJ", $hand:literal, $board:literal, $full:literal) => {
+        DebugScenario { spot_id: $spot, hero_position: "BTN", villain_position: "HJ", reference_hand: $hand, board: $board, full_board: $full, ip_range: Some(BTN_VS_HJ_CALL_RANGE), oop_range: Some(HJ_RANGE), missing_range_key: None }
+    };
+}
+
+const DEBUG_SCENARIOS: [DebugScenario; 100] = [
+    debug_scenario!(1, "BTN", "BB", "Kh4h", "3s4s5c", "3s4s5c6d2h"),
+    debug_scenario!(2, "UTG", "BB", "Ah6h", "Ad7d4h", "Ad7d4h2d4c"),
+    debug_scenario!(7, "CO", "BB", "AhTs", "7d8h4c", "7d8h4c2sQh"),
+    debug_scenario!(13, "CO", "BB", "AsQh", "Jd2d8d", "Jd2d8d4c4d"),
+    debug_scenario!(16, "BTN", "BB", "Ks9d", "3hKdAh", "3hKdAh4hQc"),
+    debug_scenario!(20, "UTG", "BB", "Tc9c", "5h7s9d", "5h7s9d8c9h"),
+    debug_scenario!(25, "BTN", "BB", "Qc5c", "Jh4h8d", "Jh4h8d8hJs"),
+    debug_scenario!(28, "BTN", "BB", "Ah4d", "4s2s2d", "4s2s2dKhJs"),
+    debug_scenario!(29, "BB", "SB", "Kd3d", "JhAdQs", "JhAdQsAs2c"),
+    debug_scenario!(35, "UTG", "BB", "JcTc", "KdAd4d", "KdAd4dJd9s"),
+    debug_scenario!(37, "UTG", "BB", "QcTc", "AcAs4c", "AcAs4c2c3s"),
+    debug_scenario!(40, "CO", "BB", "7d8d", "JsThKh", "JsThKh8sAs"),
+    debug_scenario!(48, "BTN", "BB", "9d8d", "Td9hAd", "Td9hAdQh4d"),
+    debug_scenario!(54, "CO", "BB", "8s8c", "Qc5sKh", "Qc5sKhKcTd"),
+    debug_scenario!(57, "BTN", "BB", "7h7c", "2s8d7s", "2s8d7s9hKc"),
+    debug_scenario!(64, "CO", "BB", "KhKc", "5d4s9h", "5d4s9hQs9s"),
+    debug_scenario!(69, "BTN", "BB", "Qd9h", "ThKdAd", "ThKdAd9cTs"),
+    debug_scenario!(74, "BTN", "UTG", "8d8c", "7sQsAh", "7sQsAh7c8h"),
+    debug_scenario!(75, "BB", "SB", "Ac8h", "4s5s3h", "4s5s3h4d8s"),
+    debug_scenario!(82, "UTG", "BB", "AsKs", "9dAc9c", "9dAc9cTh2c"),
+    debug_scenario!(91, "UTG", "BB", "AhTd", "TsJhAc", "TsJhAc3s6h"),
+    debug_scenario!(92, "BB", "SB", "7h4h", "Ad3cAc", "Ad3cAcJcQh"),
+    debug_scenario!(93, "CO", "BB", "Ah9h", "KdQd4d", "KdQd4dAs2d"),
+    debug_scenario!(95, "BTN", "HJ", "JdJs", "QdJcTc", "QdJcTc7s5d"),
+    debug_scenario!(96, "BTN", "BB", "TdTc", "3cJdAs", "3cJdAs6hKd"),
+    debug_scenario!(98, "CO", "BB", "AsKs", "7c8cTs", "7c8cTs4d9h"),
+    debug_scenario!(99, "BTN", "HJ", "TdTh", "4hTcAh", "4hTcAhJh8s"),
+    debug_scenario!(102, "BTN", "BB", "Ac8c", "Ah7d9c", "Ah7d9c3s9d"),
+    debug_scenario!(103, "HJ", "BB", "As3s", "9h9sAc", "9h9sAcKh8c"),
+    debug_scenario!(110, "BTN", "BB", "Jc7c", "8sTs7d", "8sTs7dTd9d"),
+    debug_scenario!(113, "BTN", "UTG", "QsTs", "Th7dKc", "Th7dKc4sJd"),
+    debug_scenario!(116, "BTN", "UTG", "KsJs", "8s6h3d", "8s6h3d9d9s"),
+    debug_scenario!(118, "CO", "BB", "Qh6h", "6d6c5s", "6d6c5sJsTd"),
+    debug_scenario!(119, "BB", "SB", "QdTc", "8dTh2d", "8dTh2d8cAc"),
+    debug_scenario!(124, "BTN", "HJ", "Td9d", "4h8cKc", "4h8cKc9c3h"),
+    debug_scenario!(126, "UTG", "BB", "6h5h", "Kd8h3c", "Kd8h3c4d2d"),
+    debug_scenario!(127, "HJ", "BB", "Kh7h", "8dAhJc", "8dAhJc3cQd"),
+    debug_scenario!(130, "HJ", "BB", "Kh6h", "8s9sAs", "8s9sAs5c3s"),
+    debug_scenario!(131, "BTN", "BB", "9s6s", "Ac7cJs", "Ac7cJs7s3s"),
+    debug_scenario!(141, "BTN", "BB", "Jd9d", "5cTc9s", "5cTc9sTd8h"),
+    debug_scenario!(142, "BTN", "UTG", "As9s", "9hAh8h", "9hAh8h9cTh"),
+    debug_scenario!(146, "BTN", "HJ", "Ah9h", "9sQsQd", "9sQsQd7d5d"),
+    debug_scenario!(148, "BTN", "UTG", "8d8s", "Td8c7d", "Td8c7dQs8h"),
+    debug_scenario!(149, "UTG", "BB", "Kh6h", "3d9sQh", "3d9sQhTc3h"),
+    debug_scenario!(153, "BTN", "HJ", "AcJc", "8d3d5d", "8d3d5d4c9d"),
+    debug_scenario!(154, "BTN", "HJ", "8s8d", "Ts5h8h", "Ts5h8hKs5c"),
+    debug_scenario!(155, "BB", "SB", "Ad9d", "AcJc9s", "AcJc9sKh7s"),
+    debug_scenario!(156, "BTN", "BB", "Ac5c", "7cAd2d", "7cAd2d2c7h"),
+    debug_scenario!(160, "UTG", "BB", "JcTc", "AdJd2c", "AdJd2cTh5h"),
+    debug_scenario!(161, "BTN", "BB", "Jd5d", "8d4d6d", "8d4d6dTd2s"),
+    debug_scenario!(163, "BTN", "HJ", "7d7c", "9cKs9d", "9cKs9d4c4h"),
+    debug_scenario!(164, "BTN", "BB", "Ac5s", "Ah8sJd", "Ah8sJd2dTh"),
+    debug_scenario!(167, "BTN", "BB", "5c4c", "QsTh6s", "QsTh6sJs2c"),
+    debug_scenario!(176, "BTN", "BB", "Qh9c", "9s2hKs", "9s2hKsAs9h"),
+    debug_scenario!(180, "UTG", "BB", "AhTc", "9s4cQd", "9s4cQd6c2c"),
+    debug_scenario!(192, "BTN", "UTG", "Ac9c", "As5sJh", "As5sJhTcAd"),
+    debug_scenario!(193, "HJ", "BB", "AcTc", "As7d2c", "As7d2c2h3s"),
+    debug_scenario!(197, "BB", "SB", "Js8s", "Kd3sKh", "Kd3sKh9s4h"),
+    debug_scenario!(203, "BB", "SB", "Kh2h", "3d5c9h", "3d5c9h7h2c"),
+    debug_scenario!(205, "BB", "SB", "3c3d", "QsQhAs", "QsQhAsJd7h"),
+    debug_scenario!(206, "BTN", "HJ", "Ah9h", "4c6c2h", "4c6c2h4d8d"),
+    debug_scenario!(209, "BB", "SB", "Qc5c", "Qs2hJd", "Qs2hJdTh5d"),
+    debug_scenario!(212, "BTN", "BB", "Td9d", "Ac5cKc", "Ac5cKc5d8h"),
+    debug_scenario!(216, "BB", "SB", "Qh8h", "4hJdJs", "4hJdJs7s6c"),
+    debug_scenario!(217, "CO", "BB", "Kc3c", "Jd8s7d", "Jd8s7d6d4h"),
+    debug_scenario!(218, "UTG", "BB", "As5s", "3hThAc", "3hThAc3c3s"),
+    debug_scenario!(224, "CO", "BB", "Kh3h", "7h4sQc", "7h4sQc9c5c"),
+    debug_scenario!(228, "BTN", "BB", "6s5s", "8s9h5h", "8s9h5h3sQh"),
+    debug_scenario!(229, "UTG", "BB", "As9s", "JsTs3d", "JsTs3dQs4d"),
+    debug_scenario!(231, "BTN", "HJ", "7s7h", "7dQh2h", "7dQh2h8s3s"),
+    debug_scenario!(234, "UTG", "BB", "AcQh", "8sKcTh", "8sKcTh5d8c"),
+    debug_scenario!(245, "BTN", "UTG", "Ad9d", "8h8s9s", "8h8s9sQd5s"),
+    debug_scenario!(246, "BB", "SB", "Kd5d", "AcQsQc", "AcQsQc2h8c"),
+    debug_scenario!(247, "UTG", "BB", "Ks6s", "As5dAh", "As5dAh9s2d"),
+    debug_scenario!(248, "UTG", "BB", "6d6s", "9h5c6h", "9h5c6h2d8d"),
+    debug_scenario!(252, "BB", "SB", "8s6s", "5s6hTs", "5s6hTsTdKc"),
+    debug_scenario!(256, "BB", "SB", "Jc7c", "4hQc7h", "4hQc7hJd7s"),
+    debug_scenario!(260, "BTN", "HJ", "AcQd", "2h2cAs", "2h2cAs4s4h"),
+    debug_scenario!(262, "UTG", "BB", "KcQc", "2s7h3h", "2s7h3h4c8c"),
+    debug_scenario!(269, "BTN", "HJ", "AdTd", "3dKh3s", "3dKh3sJs2h"),
+    debug_scenario!(272, "BTN", "BB", "AdQd", "8c2c7d", "8c2c7d6h9c"),
+    debug_scenario!(274, "BB", "SB", "8s6s", "8c5h9c", "8c5h9cQc9d"),
+    debug_scenario!(280, "BB", "SB", "Ks9d", "4s9cJd", "4s9cJd9s3s"),
+    debug_scenario!(285, "BTN", "BB", "Ts9h", "9s5sJh", "9s5sJhQh5h"),
+    debug_scenario!(288, "BB", "SB", "9c7c", "6c6hJh", "6c6hJhTc8s"),
+    debug_scenario!(289, "BTN", "BB", "As2s", "6hTc7c", "6hTc7cTs3d"),
+    debug_scenario!(290, "BB", "SB", "QcTd", "KhAd3c", "KhAd3cTc6d"),
+    debug_scenario!(292, "CO", "BB", "QdQc", "8dKhKc", "8dKhKcQsAh"),
+    debug_scenario!(295, "CO", "BB", "JcTc", "5cAsJh", "5cAsJh9dQs"),
+    debug_scenario!(297, "BTN", "BB", "AhQh", "Ac6s6d", "Ac6s6d7cJd"),
+    debug_scenario!(298, "UTG", "BB", "8h8s", "KhJd5c", "KhJd5c2dAs"),
+    debug_scenario!(301, "BB", "SB", "As5s", "5h8s6s", "5h8s6s4d4s"),
+    debug_scenario!(302, "BTN", "BB", "Ad2c", "4h7c9s", "4h7c9s6sJh"),
+    debug_scenario!(305, "BTN", "BB", "6h5h", "8c5c6s", "8c5c6s2d8d"),
+    debug_scenario!(312, "UTG", "BB", "8s8h", "Kc7dQs", "Kc7dQs8cAd"),
+    debug_scenario!(313, "CO", "BB", "Qc6c", "9c9d4h", "9c9d4h5d6h"),
+    debug_scenario!(316, "BB", "SB", "6c6h", "QhJdKc", "QhJdKcQs4d"),
+    debug_scenario!(322, "HJ", "BB", "8d8h", "Td6sJc", "Td6sJcAsQd"),
+    debug_scenario!(325, "BB", "SB", "6c3c", "4hQc7h", "4hQc7hAd4d"),
+    debug_scenario!(331, "UTG", "BB", "AdTh", "5h6h3c", "5h6h3cAs6c"),
+];
+
 #[derive(Clone, Copy)]
 struct DebugScenario {
     spot_id: u32,
@@ -476,7 +606,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     ];
 
-    println!("Running 20 IP SRP debug range scenarios...");
+    println!("Running 100 IP SRP debug range scenarios...");
     println!(
         "Scoring config: raw strength brackets = 0-8,8-17,17-27,27-38,38-50,50-62,62-73,73-83,83-92,92-100."
     );
@@ -488,7 +618,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut skipped_scenarios = 0usize;
     for (scenario_index, scenario) in DEBUG_SCENARIOS.iter().enumerate() {
         println!(
-            "Scenario {}/20: Spot {} {} vs {} board {}",
+            "Scenario {}/100: Spot {} {} vs {} board {}",
             scenario_index + 1,
             scenario.spot_id,
             scenario.hero_position,
@@ -528,8 +658,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut scenario_failed = false;
         for sizing in flop_sizings {
             println!(
-                "Solving {} range at {} pot",
-                scenario.hero_position, sizing.tree_size
+                "Solving at {} pot",
+                sizing.tree_size
             );
             match solve_debug_scenario(*scenario, sizing) {
                 Ok(solve) => {
