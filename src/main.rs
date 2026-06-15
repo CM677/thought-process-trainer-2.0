@@ -1,7 +1,7 @@
 use postflop_solver::*;
 use std::error::Error;
 
-const OUTPUT_FILE: &str = "output_debug_100_ip_srp_ranges.csv";
+const OUTPUT_FILE: &str = "output_debug_realistic_flop_first_ip_srp.csv";
 
 const OOP_PLAYER: usize = 0;
 const IP_PLAYER: usize = 1;
@@ -11,8 +11,10 @@ const SOLVE_ITERATIONS: u32 = 500;
 const FLOP: &str = "Ah7s4c";
 const TURN: &str = "6s";
 const TURN_BOARD: &str = "Ah7s4c6s";
-const STARTING_POT: i32 = 600;
+const STARTING_POT: i32 = 550;
 const STARTING_STACK: i32 = 9750;
+const ADD_ALLIN_THRESHOLD: f64 = 0.67;
+const FORCE_ALLIN_THRESHOLD: f64 = 0.8;
 
 const BTN_RANGE: &str =
     "22+,A2s+,K2s+,Q2s+,A2o+,K7o+,Q9o+,J9o+,T9o,J4s+,T6s+,96s+,86s+,75s+,65s,54s";
@@ -396,7 +398,8 @@ macro_rules! debug_scenario {
     };
 }
 
-const DEBUG_SCENARIOS: [DebugScenario; 100] = [
+#[allow(dead_code)]
+const ALL_DEBUG_SCENARIOS: [DebugScenario; 100] = [
     debug_scenario!(1, "BTN", "BB", "Kh4h", "3s4s5c", "3s4s5c6d2h"),
     debug_scenario!(2, "UTG", "BB", "Ah6h", "Ad7d4h", "Ad7d4h2d4c"),
     debug_scenario!(7, "CO", "BB", "AhTs", "7d8h4c", "7d8h4c2sQh"),
@@ -499,6 +502,10 @@ const DEBUG_SCENARIOS: [DebugScenario; 100] = [
     debug_scenario!(331, "UTG", "BB", "AdTh", "5h6h3c", "5h6h3cAs6c"),
 ];
 
+const DEBUG_SCENARIOS: [DebugScenario; 1] = [
+    debug_scenario!(1, "BTN", "BB", "Kh4h", "3s4s5c", "3s4s5c6d2h"),
+];
+
 #[derive(Clone, Copy)]
 struct DebugScenario {
     spot_id: u32,
@@ -599,14 +606,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             csv_size: "0.75",
             suffix: "75",
         },
-        Sizing {
-            tree_size: "125%",
-            csv_size: "1.25",
-            suffix: "125",
-        },
     ];
 
-    println!("Running 100 IP SRP debug range scenarios...");
+    let scenario = &DEBUG_SCENARIOS[0];
+
+    println!("Running first IP SRP realistic flop test only");
+    println!(
+        "Spot {} {} vs {} board {}",
+        scenario.spot_id,
+        scenario.hero_position,
+        scenario.villain_position,
+        scenario.board
+    );
+    println!(
+        "Test spot: BTN vs BB SRP, board {}, starting pot {:.1}BB, effective stack {:.1}BB",
+        scenario.board,
+        STARTING_POT as f32 / BB_CHIPS,
+        STARTING_STACK as f32 / BB_CHIPS
+    );
+    println!("TURN/RIVER STILL SIMPLIFIED IN THIS DEBUG TREE");
     println!(
         "Scoring config: raw strength brackets = 0-8,8-17,17-27,27-38,38-50,50-62,62-73,73-83,83-92,92-100."
     );
@@ -615,86 +633,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut writer = csv::Writer::from_path(OUTPUT_FILE)?;
     write_debug_header(&mut writer)?;
     let mut total_rows = 0usize;
-    let mut skipped_scenarios = 0usize;
-    for (scenario_index, scenario) in DEBUG_SCENARIOS.iter().enumerate() {
-        println!(
-            "Scenario {}/100: Spot {} {} vs {} board {}",
-            scenario_index + 1,
-            scenario.spot_id,
-            scenario.hero_position,
-            scenario.villain_position,
-            scenario.board
-        );
+    let (total_combos, live_combos) = hero_range_combo_counts(scenario)?;
+    let skipped_board_combos = total_combos.saturating_sub(live_combos);
+    println!("Skipped {skipped_board_combos} combos because they contained board cards.");
 
-        if let Some(missing_key) = scenario.missing_range_key {
-            eprintln!(
-                "Skipping scenario {} (Spot {}): missing range key: {}",
-                scenario_index + 1,
-                scenario.spot_id,
-                missing_key
-            );
-            skipped_scenarios += 1;
-            continue;
-        }
-
-        let (total_combos, live_combos) = match hero_range_combo_counts(scenario) {
-            Ok(counts) => counts,
-            Err(error) => {
-                eprintln!(
-                    "Skipping scenario {} (Spot {}): failed to enumerate hero range: {error}",
-                    scenario_index + 1,
-                    scenario.spot_id
-                );
-                skipped_scenarios += 1;
-                continue;
-            }
-        };
-        let skipped_board_combos = total_combos.saturating_sub(live_combos);
-        println!(
-            "Skipped {skipped_board_combos} combos because they contained board cards."
-        );
-
-        let mut scenario_rows = 0usize;
-        let mut scenario_failed = false;
-        for sizing in flop_sizings {
-            println!(
-                "Solving at {} pot",
-                sizing.tree_size
-            );
-            match solve_debug_scenario(*scenario, sizing) {
-                Ok(solve) => {
-                    let rows = export_debug_range_rows(
-                        &mut writer,
-                        scenario_index + 1,
-                        scenario,
-                        &solve,
-                    )?;
-                    scenario_rows += rows;
-                    total_rows += rows;
-                }
-                Err(error) => {
-                    eprintln!(
-                        "Scenario {} (Spot {}) failed at {}: {error}",
-                        scenario_index + 1,
-                        scenario.spot_id,
-                        sizing.tree_size
-                    );
-                    scenario_failed = true;
-                }
-            }
-        }
-        if scenario_failed {
-            skipped_scenarios += 1;
-        }
-        println!(
-            "Hero range combos exported: {live_combos} per sizing, {scenario_rows} rows total"
-        );
+    for sizing in flop_sizings {
+        println!("Branch {}", sizing.tree_size);
+        let solve = solve_debug_scenario(*scenario, sizing)?;
+        total_rows += export_debug_range_rows(
+            &mut writer,
+            1,
+            scenario,
+            &solve,
+        )?;
     }
 
     writer.flush()?;
     println!("Writing {OUTPUT_FILE}");
     println!("Done. Rows written: {total_rows}");
-    println!("Skipped scenarios: {skipped_scenarios}");
+    println!("Hero range combos exported: {live_combos} per sizing");
     Ok(())
 }
 
@@ -751,21 +708,194 @@ fn build_debug_flop_game(
         rake_rate: 0.0,
         rake_cap: 0.0,
         flop_bet_sizes: [
-            Default::default(),
-            BetSizeOptions::try_from((sizing.tree_size, ""))?,
+            BetSizeOptions::try_from(("33%, 75%", "3x"))?,
+            BetSizeOptions::try_from((sizing.tree_size, "3x"))?,
         ],
         turn_bet_sizes: Default::default(),
         river_bet_sizes: Default::default(),
         turn_donk_sizes: None,
         river_donk_sizes: None,
-        add_allin_threshold: 0.0,
-        force_allin_threshold: 0.0,
+        add_allin_threshold: ADD_ALLIN_THRESHOLD,
+        force_allin_threshold: FORCE_ALLIN_THRESHOLD,
         merging_threshold: 0.0,
     };
+    let mut action_tree = ActionTree::new(tree_config)?;
+    prune_actions_after_raise(&mut action_tree)?;
+    audit_realistic_flop_tree(&mut action_tree, scenario, sizing)?;
     Ok(PostFlopGame::with_config(
         card_config,
-        ActionTree::new(tree_config)?,
+        action_tree,
     )?)
+}
+
+fn prune_actions_after_raise(tree: &mut ActionTree) -> Result<(), String> {
+    let mut lines_to_remove = Vec::new();
+    collect_reraise_lines(tree, &mut lines_to_remove)?;
+    tree.back_to_root();
+    for line in lines_to_remove {
+        tree.remove_line(&line)?;
+    }
+    Ok(())
+}
+
+fn collect_reraise_lines(
+    tree: &mut ActionTree,
+    lines_to_remove: &mut Vec<Vec<Action>>,
+) -> Result<(), String> {
+    let actions = tree.available_actions().to_vec();
+    let facing_raise = matches!(tree.history().last(), Some(Action::Raise(_)));
+
+    for action in actions {
+        if facing_raise && matches!(action, Action::Raise(_) | Action::AllIn(_)) {
+            let mut line = tree.history().to_vec();
+            line.push(action);
+            lines_to_remove.push(line);
+            continue;
+        }
+
+        tree.play(action)?;
+        if !tree.is_terminal_node() {
+            collect_reraise_lines(tree, lines_to_remove)?;
+        }
+        tree.undo()?;
+    }
+    Ok(())
+}
+
+fn audit_realistic_flop_tree(
+    tree: &mut ActionTree,
+    scenario: DebugScenario,
+    sizing: Sizing,
+) -> Result<(), String> {
+    tree.back_to_root();
+    let oop_root_actions = tree.available_actions().to_vec();
+    let oop_check = find_tree_action(&oop_root_actions, |action| matches!(action, Action::Check))?;
+    let oop_donks = oop_root_actions
+        .iter()
+        .copied()
+        .filter(|action| matches!(action, Action::Bet(_)))
+        .collect::<Vec<_>>();
+
+    tree.play(oop_check)?;
+    let ip_after_check_actions = tree.available_actions().to_vec();
+    let ip_bet = find_tree_action(&ip_after_check_actions, |action| matches!(action, Action::Bet(_)))?;
+
+    tree.play(ip_bet)?;
+    let oop_response_to_ip_bet = tree.available_actions().to_vec();
+    let oop_raise =
+        find_tree_action(&oop_response_to_ip_bet, |action| matches!(action, Action::Raise(_)))?;
+
+    tree.play(oop_raise)?;
+    let ip_response_to_check_raise = tree.available_actions().to_vec();
+    tree.back_to_root();
+
+    let mut donk_response_logs = Vec::new();
+    let mut can_ip_raise_donk = true;
+    let mut oop_after_ip_raise_logs = Vec::new();
+    for donk in &oop_donks {
+        tree.play(*donk)?;
+        let ip_response = tree.available_actions().to_vec();
+        let ip_raise = find_tree_action(&ip_response, |action| matches!(action, Action::Raise(_)))?;
+        donk_response_logs.push(format!("{donk:?} -> {ip_response:?}"));
+        tree.play(ip_raise)?;
+        let oop_after_raise = tree.available_actions().to_vec();
+        require_fold_call_only("OOP response to IP raise versus donk", &oop_after_raise)?;
+        oop_after_ip_raise_logs.push(format!("{donk:?}, {ip_raise:?} -> {oop_after_raise:?}"));
+        can_ip_raise_donk &= has_tree_action(&ip_response, |action| matches!(action, Action::Raise(_)));
+        tree.back_to_root();
+    }
+
+    let can_oop_donk = oop_donks.len() == 2;
+    let can_oop_check_raise =
+        has_tree_action(&oop_response_to_ip_bet, |action| matches!(action, Action::Raise(_)));
+    let can_ip_reraise =
+        has_tree_action(&ip_response_to_check_raise, |action| {
+            matches!(action, Action::Raise(_) | Action::AllIn(_))
+        });
+
+    require_fold_call_raise("OOP response to IP bet", &oop_response_to_ip_bet)?;
+    require_fold_call_only("IP response to OOP check-raise", &ip_response_to_check_raise)?;
+
+    println!();
+    println!("TREE CONFIG");
+    println!("Pot type: SRP");
+    println!("Board: {}", scenario.board);
+    println!("Branch sizing: {}", sizing.tree_size);
+    println!(
+        "Starting pot: {} chips ({:.1}BB)",
+        STARTING_POT,
+        STARTING_POT as f32 / BB_CHIPS
+    );
+    println!(
+        "Effective stack: {} chips ({:.1}BB)",
+        STARTING_STACK,
+        STARTING_STACK as f32 / BB_CHIPS
+    );
+    println!("OOP flop sizes: 33%, 75%");
+    println!("IP flop sizes after OOP check: {}", sizing.tree_size);
+    println!("OOP root actions: {oop_root_actions:?}");
+    println!("IP actions after OOP check: {ip_after_check_actions:?}");
+    println!("OOP response to IP bet: {oop_response_to_ip_bet:?}");
+    println!("IP response to OOP check-raise: {ip_response_to_check_raise:?}");
+    println!("IP response to OOP donk: {donk_response_logs:?}");
+    println!("OOP response to IP raise: {oop_after_ip_raise_logs:?}");
+    println!("Raise sizes: 3x the previous bet");
+    println!(
+        "All-in thresholds: add <= {:.2} pot, force when post-call SPR <= {:.2}",
+        ADD_ALLIN_THRESHOLD,
+        FORCE_ALLIN_THRESHOLD
+    );
+    println!("Can OOP donk flop: {can_oop_donk}");
+    println!("Can OOP check-raise flop: {can_oop_check_raise}");
+    println!("Can IP raise donk: {can_ip_raise_donk}");
+    println!("Can IP re-raise after check-raise: {can_ip_reraise}");
+    println!("Turn/river status: TURN/RIVER STILL SIMPLIFIED IN THIS DEBUG TREE");
+    println!();
+
+    if !can_oop_donk || !can_oop_check_raise || !can_ip_raise_donk || can_ip_reraise {
+        return Err("realistic flop tree audit failed".to_string());
+    }
+    Ok(())
+}
+
+fn find_tree_action<F>(actions: &[Action], predicate: F) -> Result<Action, String>
+where
+    F: Fn(&Action) -> bool,
+{
+    actions
+        .iter()
+        .copied()
+        .find(predicate)
+        .ok_or_else(|| format!("required action not found in {actions:?}"))
+}
+
+fn has_tree_action<F>(actions: &[Action], predicate: F) -> bool
+where
+    F: Fn(&Action) -> bool,
+{
+    actions.iter().any(predicate)
+}
+
+fn require_fold_call_raise(label: &str, actions: &[Action]) -> Result<(), String> {
+    let has_fold = has_tree_action(actions, |action| matches!(action, Action::Fold));
+    let has_call = has_tree_action(actions, |action| matches!(action, Action::Call));
+    let has_raise = has_tree_action(actions, |action| matches!(action, Action::Raise(_)));
+    if has_fold && has_call && has_raise {
+        Ok(())
+    } else {
+        Err(format!("{label} must contain Fold, Call, Raise; got {actions:?}"))
+    }
+}
+
+fn require_fold_call_only(label: &str, actions: &[Action]) -> Result<(), String> {
+    let valid = actions.len() == 2
+        && has_tree_action(actions, |action| matches!(action, Action::Fold))
+        && has_tree_action(actions, |action| matches!(action, Action::Call));
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("{label} must contain only Fold and Call; got {actions:?}"))
+    }
 }
 
 fn hero_range_combo_counts(
