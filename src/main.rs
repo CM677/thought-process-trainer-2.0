@@ -606,6 +606,17 @@ struct ActionExportCounts {
     btn_rows: usize,
 }
 
+struct TurnRiverAudit {
+    turn_oop_actions: Vec<Action>,
+    turn_ip_after_oop_check_actions: Vec<Action>,
+    turn_ip_vs_oop_bet_actions: Vec<Action>,
+    turn_oop_vs_ip_raise_actions: Vec<Action>,
+    river_oop_actions: Vec<Action>,
+    river_ip_after_oop_check_actions: Vec<Action>,
+    river_ip_vs_oop_bet_actions: Vec<Action>,
+    river_oop_vs_ip_raise_actions: Vec<Action>,
+}
+
 struct RangeStats {
     hero_weighted_value_combos: f32,
     villain_weighted_value_combos: f32,
@@ -666,12 +677,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Running first 100 IP SRP realistic flop ranges");
     println!("Using realistic flop tree, not check-down tree");
     println!("CODEX_TEST_FIRST_100_REALISTIC_TREE_WITH_BTN_AND_BB_ACTION_STATS");
+    println!("CODEX_TEST_REALISTIC_TURN_RIVER_TREE_FIX");
     println!(
         "Starting pot {:.1}BB, effective stack {:.1}BB",
         STARTING_POT as f32 / BB_CHIPS,
         STARTING_STACK as f32 / BB_CHIPS
     );
-    println!("TURN/RIVER STILL SIMPLIFIED IN THIS DEBUG TREE");
+    println!("Turn/river status: REALISTIC TURN/RIVER ENABLED");
     println!(
         "Scoring config: raw strength brackets = 0-8,8-17,17-27,27-38,38-50,50-62,62-73,73-83,83-92,92-100."
     );
@@ -800,12 +812,18 @@ fn solve_debug_scenario(
         .ok_or_else(|| format!("missing villain range for Spot {}", scenario.spot_id))?;
     let ip_range = normalize_range_for_solver(ip_range_text).parse()?;
     let oop_range = normalize_range_for_solver(oop_range_text).parse()?;
-    let mut game = build_debug_flop_game(
+    let mut game = match build_debug_flop_game(
         scenario,
         sizing,
         ip_range,
         oop_range,
-    )?;
+    ) {
+        Ok(game) => game,
+        Err(error) => {
+            println!("REALISTIC_TURN_RIVER_TREE_TOO_LARGE_OR_BUILD_FAILED: {error}");
+            return Err(error);
+        }
+    };
     game.allocate_memory(false);
     solve(&mut game, SOLVE_ITERATIONS, 0.5, true);
     let bb_actions = extract_bb_flop_actions(&mut game, scenario, sizing)?;
@@ -849,8 +867,14 @@ fn build_debug_flop_game(
             BetSizeOptions::try_from(("33%, 75%", "3x"))?,
             BetSizeOptions::try_from((sizing.tree_size, "3x"))?,
         ],
-        turn_bet_sizes: Default::default(),
-        river_bet_sizes: Default::default(),
+        turn_bet_sizes: [
+            BetSizeOptions::try_from(("33%, 75%", "3x"))?,
+            BetSizeOptions::try_from(("50%, 100%", "3x"))?,
+        ],
+        river_bet_sizes: [
+            BetSizeOptions::try_from(("33%, 100%", "3x"))?,
+            BetSizeOptions::try_from(("50%, 100%, 150%", "3x"))?,
+        ],
         turn_donk_sizes: None,
         river_donk_sizes: None,
         add_allin_threshold: ADD_ALLIN_THRESHOLD,
@@ -953,6 +977,7 @@ fn audit_realistic_flop_tree(
 
     require_fold_call_raise("OOP response to IP bet", &oop_response_to_ip_bet)?;
     require_fold_call_only("IP response to OOP check-raise", &ip_response_to_check_raise)?;
+    let turn_river_audit = audit_turn_river_after_flop_bet_call(tree, oop_check, ip_bet)?;
 
     println!();
     println!("TREE CONFIG");
@@ -987,13 +1012,129 @@ fn audit_realistic_flop_tree(
     println!("Can OOP check-raise flop: {can_oop_check_raise}");
     println!("Can IP raise donk: {can_ip_raise_donk}");
     println!("Can IP re-raise after check-raise: {can_ip_reraise}");
-    println!("Turn/river status: TURN/RIVER STILL SIMPLIFIED IN THIS DEBUG TREE");
+    println!("Turn/river status: REALISTIC TURN/RIVER ENABLED");
+    println!("Turn OOP sizes: 33%, 75%");
+    println!("Turn IP sizes: 50%, 100%");
+    println!("River OOP sizes: 33%, 100%");
+    println!("River IP sizes: 50%, 100%, 150%");
+    println!("Turn raise size: 3x previous bet, no re-raises");
+    println!("River raise size: 3x previous bet, no re-raises");
+    println!("Path BB check -> BTN bet -> BB call:");
+    println!("Turn OOP actions: {:?}", turn_river_audit.turn_oop_actions);
+    println!(
+        "Turn IP after OOP check: {:?}",
+        turn_river_audit.turn_ip_after_oop_check_actions
+    );
+    println!(
+        "Turn IP facing OOP bet: {:?}",
+        turn_river_audit.turn_ip_vs_oop_bet_actions
+    );
+    println!(
+        "Turn OOP after IP raise: {:?}",
+        turn_river_audit.turn_oop_vs_ip_raise_actions
+    );
+    println!("River OOP actions: {:?}", turn_river_audit.river_oop_actions);
+    println!(
+        "River IP after OOP check: {:?}",
+        turn_river_audit.river_ip_after_oop_check_actions
+    );
+    println!(
+        "River IP facing OOP bet: {:?}",
+        turn_river_audit.river_ip_vs_oop_bet_actions
+    );
+    println!(
+        "River OOP after IP raise: {:?}",
+        turn_river_audit.river_oop_vs_ip_raise_actions
+    );
+    println!("Confirm no re-raises: true");
     println!();
 
     if !can_oop_donk || !can_oop_check_raise || !can_ip_raise_donk || can_ip_reraise {
         return Err("realistic flop tree audit failed".to_string());
     }
     Ok(())
+}
+
+fn audit_turn_river_after_flop_bet_call(
+    tree: &mut ActionTree,
+    oop_check: Action,
+    ip_bet: Action,
+) -> Result<TurnRiverAudit, String> {
+    tree.back_to_root();
+    tree.play(oop_check)?;
+    tree.play(ip_bet)?;
+    let flop_oop_response = tree.available_actions().to_vec();
+    let oop_call = find_tree_action(&flop_oop_response, |action| matches!(action, Action::Call))?;
+    tree.play(oop_call)?;
+    let turn_oop_actions = tree.available_actions().to_vec();
+    require_check_and_bets("Turn OOP actions after flop bet-call", &turn_oop_actions, 2)?;
+    let turn_oop_bet = find_tree_action(&turn_oop_actions, |action| matches!(action, Action::Bet(_)))?;
+    tree.play(turn_oop_bet)?;
+    let turn_ip_vs_oop_bet_actions = tree.available_actions().to_vec();
+    require_fold_call_raise("Turn IP response to OOP bet", &turn_ip_vs_oop_bet_actions)?;
+    let turn_ip_raise = find_tree_action(&turn_ip_vs_oop_bet_actions, |action| matches!(action, Action::Raise(_)))?;
+    tree.play(turn_ip_raise)?;
+    let turn_oop_vs_ip_raise_actions = tree.available_actions().to_vec();
+    require_fold_call_only("Turn OOP response to IP raise", &turn_oop_vs_ip_raise_actions)?;
+
+    tree.back_to_root();
+    tree.play(oop_check)?;
+    tree.play(ip_bet)?;
+    tree.play(oop_call)?;
+    let turn_oop_actions_for_check = tree.available_actions().to_vec();
+    let turn_oop_check =
+        find_tree_action(&turn_oop_actions_for_check, |action| matches!(action, Action::Check))?;
+    tree.play(turn_oop_check)?;
+    let turn_ip_after_oop_check_actions = tree.available_actions().to_vec();
+    require_check_and_bets(
+        "Turn IP actions after OOP check",
+        &turn_ip_after_oop_check_actions,
+        2,
+    )?;
+    let turn_ip_check = find_tree_action(&turn_ip_after_oop_check_actions, |action| {
+        matches!(action, Action::Check)
+    })?;
+    tree.play(turn_ip_check)?;
+    let river_oop_actions = tree.available_actions().to_vec();
+    require_check_and_bets("River OOP actions after turn check-check", &river_oop_actions, 2)?;
+    let river_oop_bet = find_tree_action(&river_oop_actions, |action| matches!(action, Action::Bet(_)))?;
+    tree.play(river_oop_bet)?;
+    let river_ip_vs_oop_bet_actions = tree.available_actions().to_vec();
+    require_fold_call_raise("River IP response to OOP bet", &river_ip_vs_oop_bet_actions)?;
+    let river_ip_raise =
+        find_tree_action(&river_ip_vs_oop_bet_actions, |action| matches!(action, Action::Raise(_)))?;
+    tree.play(river_ip_raise)?;
+    let river_oop_vs_ip_raise_actions = tree.available_actions().to_vec();
+    require_fold_call_only("River OOP response to IP raise", &river_oop_vs_ip_raise_actions)?;
+
+    tree.back_to_root();
+    tree.play(oop_check)?;
+    tree.play(ip_bet)?;
+    tree.play(oop_call)?;
+    tree.play(turn_oop_check)?;
+    tree.play(turn_ip_check)?;
+    let river_oop_actions_for_check = tree.available_actions().to_vec();
+    let river_oop_check =
+        find_tree_action(&river_oop_actions_for_check, |action| matches!(action, Action::Check))?;
+    tree.play(river_oop_check)?;
+    let river_ip_after_oop_check_actions = tree.available_actions().to_vec();
+    require_check_and_bets(
+        "River IP actions after OOP check",
+        &river_ip_after_oop_check_actions,
+        3,
+    )?;
+    tree.back_to_root();
+
+    Ok(TurnRiverAudit {
+        turn_oop_actions,
+        turn_ip_after_oop_check_actions,
+        turn_ip_vs_oop_bet_actions,
+        turn_oop_vs_ip_raise_actions,
+        river_oop_actions,
+        river_ip_after_oop_check_actions,
+        river_ip_vs_oop_bet_actions,
+        river_oop_vs_ip_raise_actions,
+    })
 }
 
 fn find_tree_action<F>(actions: &[Action], predicate: F) -> Result<Action, String>
@@ -1033,6 +1174,26 @@ fn require_fold_call_only(label: &str, actions: &[Action]) -> Result<(), String>
         Ok(())
     } else {
         Err(format!("{label} must contain only Fold and Call; got {actions:?}"))
+    }
+}
+
+fn require_check_and_bets(
+    label: &str,
+    actions: &[Action],
+    minimum_bet_count: usize,
+) -> Result<(), String> {
+    let bet_count = actions
+        .iter()
+        .filter(|action| matches!(action, Action::Bet(_)))
+        .count();
+    let valid = has_tree_action(actions, |action| matches!(action, Action::Check))
+        && bet_count >= minimum_bet_count;
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} must contain Check and at least {minimum_bet_count} Bet actions; got {actions:?}"
+        ))
     }
 }
 
