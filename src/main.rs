@@ -16,7 +16,6 @@ const STARTING_POT: i32 = 550;
 const STARTING_STACK: i32 = 9750;
 const ADD_ALLIN_THRESHOLD: f64 = 0.67;
 const FORCE_ALLIN_THRESHOLD: f64 = 0.8;
-const PRIMARY_ACTION_EPS: f32 = 0.05;
 
 const BTN_RANGE: &str =
     "22+,A2s+,K2s+,Q2s+,A2o+,K7o+,Q9o+,J9o+,T9o,J4s+,T6s+,96s+,86s+,75s+,65s,54s";
@@ -572,6 +571,7 @@ struct SolvedDebugBranch {
 
 struct BbFlopActionExtract {
     hands: Vec<HandCombo>,
+    ip_hands: Vec<HandCombo>,
     branch_suffix: &'static str,
     branch_size: &'static str,
     root_found: bool,
@@ -581,6 +581,8 @@ struct BbFlopActionExtract {
     vs_ip_bet_found: bool,
     donk33_vs_raise_found: bool,
     donk75_vs_raise_found: bool,
+    ip_vs_donk_found: bool,
+    ip_vs_check_raise_found: bool,
     check_freq: Vec<Option<f32>>,
     donk33_freq: Vec<Option<f32>>,
     donk75_freq: Vec<Option<f32>>,
@@ -591,6 +593,17 @@ struct BbFlopActionExtract {
     donk33_vs_raise_call_freq: Vec<Option<f32>>,
     donk75_vs_raise_fold_freq: Vec<Option<f32>>,
     donk75_vs_raise_call_freq: Vec<Option<f32>>,
+    btn_vs_donk_fold_freq: Vec<Option<f32>>,
+    btn_vs_donk_call_freq: Vec<Option<f32>>,
+    btn_vs_donk_raise_freq: Vec<Option<f32>>,
+    btn_vs_check_raise_fold_freq: Vec<Option<f32>>,
+    btn_vs_check_raise_call_freq: Vec<Option<f32>>,
+}
+
+struct ActionExportCounts {
+    total_rows: usize,
+    bb_rows: usize,
+    btn_rows: usize,
 }
 
 struct RangeStats {
@@ -638,19 +651,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     ];
 
-    let scenario = &DEBUG_SCENARIOS[0];
+    let scenarios = ALL_DEBUG_SCENARIOS
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, scenario)| {
+            scenario.ip_range.is_some()
+                && scenario.oop_range.is_some()
+                && scenario.missing_range_key.is_none()
+        })
+        .take(100)
+        .collect::<Vec<_>>();
 
-    println!("Running first IP SRP realistic flop test only");
+    println!("Running first 100 IP SRP realistic flop ranges");
+    println!("Using realistic flop tree, not check-down tree");
+    println!("CODEX_TEST_FIRST_100_REALISTIC_TREE_WITH_BTN_AND_BB_ACTION_STATS");
     println!(
-        "Spot {} {} vs {} board {}",
-        scenario.spot_id,
-        scenario.hero_position,
-        scenario.villain_position,
-        scenario.board
-    );
-    println!(
-        "Test spot: BTN vs BB SRP, board {}, starting pot {:.1}BB, effective stack {:.1}BB",
-        scenario.board,
+        "Starting pot {:.1}BB, effective stack {:.1}BB",
         STARTING_POT as f32 / BB_CHIPS,
         STARTING_STACK as f32 / BB_CHIPS
     );
@@ -667,29 +684,107 @@ fn main() -> Result<(), Box<dyn Error>> {
     write_bb_flop_actions_header(&mut bb_writer)?;
     let mut total_rows = 0usize;
     let mut total_bb_rows = 0usize;
-    let (total_combos, live_combos) = hero_range_combo_counts(scenario)?;
-    let skipped_board_combos = total_combos.saturating_sub(live_combos);
-    println!("Skipped {skipped_board_combos} combos because they contained board cards.");
+    let mut total_bb_hand_rows = 0usize;
+    let mut total_btn_action_rows = 0usize;
+    let mut scenarios_exported = std::collections::BTreeSet::new();
+    let mut branch_solves = 0usize;
 
-    for sizing in flop_sizings {
-        println!("Branch {}", sizing.tree_size);
-        let solved = solve_debug_scenario(*scenario, sizing)?;
-        total_rows += export_debug_range_rows(
-            &mut writer,
-            1,
-            scenario,
-            &solved.decision,
-        )?;
-        total_bb_rows += export_bb_flop_actions_rows(&mut bb_writer, 1, scenario, &solved.bb_actions)?;
+    for (attempt_index, (index, scenario)) in scenarios.iter().copied().enumerate() {
+        let attempt_number = attempt_index + 1;
+        let scenario_id = index + 1;
+        println!(
+            "Scenario {}/100: spot_id={} {} vs {} board={} tree_mode=REALISTIC_FLOP_TREE",
+            attempt_number,
+            scenario.spot_id,
+            scenario.hero_position,
+            scenario.villain_position,
+            scenario.board
+        );
+        match hero_range_combo_counts(&scenario) {
+            Ok((total_combos, live_combos)) => {
+                let skipped_board_combos = total_combos.saturating_sub(live_combos);
+                println!("Skipped {skipped_board_combos} combos because they contained board cards.");
+            }
+            Err(error) => {
+                println!(
+                    "Scenario spot_id={} combo-count diagnostic failed: {error}",
+                    scenario.spot_id
+                );
+            }
+        }
+
+        for sizing in flop_sizings {
+            println!(
+                "Scenario {}/100 spot_id={} spot_name={} board={} branch={} tree_mode=REALISTIC_FLOP_TREE",
+                attempt_number,
+                scenario.spot_id,
+                debug_spot_name(&scenario, sizing.suffix),
+                scenario.board,
+                sizing.tree_size
+            );
+            match solve_debug_scenario(scenario, sizing) {
+                Ok(solved) => {
+                    let added_btn_rows = export_debug_range_rows(
+                        &mut writer,
+                        scenario_id,
+                        &scenario,
+                        &solved.decision,
+                    )?;
+                    let action_counts = export_bb_flop_actions_rows(
+                        &mut bb_writer,
+                        scenario_id as u32,
+                        &scenario,
+                        &solved.bb_actions,
+                    )?;
+                    total_rows += added_btn_rows;
+                    total_bb_rows += action_counts.total_rows;
+                    total_bb_hand_rows += action_counts.bb_rows;
+                    total_btn_action_rows += action_counts.btn_rows;
+                    branch_solves += 1;
+                    scenarios_exported.insert(scenario.spot_id);
+                    println!("Existing BTN CSV row count added: {added_btn_rows}");
+                    println!("BB_HAND_ACTIONS rows added: {}", action_counts.bb_rows);
+                    println!("BTN_HAND_ACTIONS rows added: {}", action_counts.btn_rows);
+                    println!("BB root node found: {}", solved.bb_actions.root_found);
+                    println!(
+                        "BB response after check -> BTN bet found: {}",
+                        solved.bb_actions.vs_ip_bet_found
+                    );
+                    println!(
+                        "BTN response vs BB donk found: {}",
+                        solved.bb_actions.ip_vs_donk_found
+                    );
+                    println!(
+                        "BB response after donk -> BTN raise found: {}",
+                        solved.bb_actions.donk33_vs_raise_found
+                            || solved.bb_actions.donk75_vs_raise_found
+                    );
+                    println!(
+                        "BTN response vs BB check-raise found: {}",
+                        solved.bb_actions.ip_vs_check_raise_found
+                    );
+                }
+                Err(error) => {
+                    println!(
+                        "Scenario spot_id={} branch {} failed: {error}. Continuing.",
+                        scenario.spot_id, sizing.tree_size
+                    );
+                }
+            }
+        }
     }
 
     writer.flush()?;
     bb_writer.flush()?;
-    println!("Writing {OUTPUT_FILE}");
-    println!("Done. Rows written: {total_rows}");
-    println!("Hero range combos exported: {live_combos} per sizing");
-    println!("Exported BB flop actions to {BB_FLOP_ACTIONS_OUTPUT_FILE}");
-    println!("BB flop action rows: {total_bb_rows}");
+    println!("Total scenarios attempted: {}", scenarios.len());
+    println!("Total scenarios solved/exported: {}", scenarios_exported.len());
+    println!("Total branch solves: {branch_solves}");
+    println!("Output path for existing BTN/IP CSV: {OUTPUT_FILE}");
+    println!("Output path for {BB_FLOP_ACTIONS_OUTPUT_FILE}: {BB_FLOP_ACTIONS_OUTPUT_FILE}");
+    println!("Total BTN/IP rows: {total_rows}");
+    println!("Total BB CSV rows: {total_bb_rows}");
+    println!("BB_HAND_ACTIONS rows: {total_bb_hand_rows}");
+    println!("BTN_HAND_ACTIONS rows: {total_btn_action_rows}");
     Ok(())
 }
 
@@ -1649,9 +1744,12 @@ fn extract_bb_flop_actions(
     game.back_to_root();
     game.cache_normalized_weights();
     let hands = player_hands(game, OOP_PLAYER)?;
+    let ip_hands = player_hands(game, IP_PLAYER)?;
     let hand_count = game.private_cards(OOP_PLAYER).len();
+    let ip_hand_count = game.private_cards(IP_PLAYER).len();
     let mut extract = BbFlopActionExtract {
         hands,
+        ip_hands,
         branch_suffix: sizing.suffix,
         branch_size: sizing.csv_size,
         root_found: game.current_player() == OOP_PLAYER,
@@ -1661,6 +1759,8 @@ fn extract_bb_flop_actions(
         vs_ip_bet_found: false,
         donk33_vs_raise_found: false,
         donk75_vs_raise_found: false,
+        ip_vs_donk_found: false,
+        ip_vs_check_raise_found: false,
         check_freq: empty_freqs(hand_count),
         donk33_freq: empty_freqs(hand_count),
         donk75_freq: empty_freqs(hand_count),
@@ -1671,6 +1771,11 @@ fn extract_bb_flop_actions(
         donk33_vs_raise_call_freq: empty_freqs(hand_count),
         donk75_vs_raise_fold_freq: empty_freqs(hand_count),
         donk75_vs_raise_call_freq: empty_freqs(hand_count),
+        btn_vs_donk_fold_freq: empty_freqs(ip_hand_count),
+        btn_vs_donk_call_freq: empty_freqs(ip_hand_count),
+        btn_vs_donk_raise_freq: empty_freqs(ip_hand_count),
+        btn_vs_check_raise_fold_freq: empty_freqs(ip_hand_count),
+        btn_vs_check_raise_call_freq: empty_freqs(ip_hand_count),
     };
 
     if !extract.root_found {
@@ -1715,6 +1820,35 @@ fn extract_bb_flop_actions(
             fill_action_freqs(&mut extract.vs_bet_fold_freq, &response_strategy, fold_index, hand_count);
             fill_action_freqs(&mut extract.vs_bet_call_freq, &response_strategy, call_index, hand_count);
             fill_action_freqs(&mut extract.vs_bet_raise_freq, &response_strategy, raise_index, hand_count);
+            if let Some(raise_index) = raise_index {
+                game.play(raise_index);
+                game.cache_normalized_weights();
+                let ip_check_raise_actions = game.available_actions().to_vec();
+                println!(
+                    "BB flop action export: after check -> IP bet -> BB raise, BTN actions = {ip_check_raise_actions:?}"
+                );
+                let ip_check_raise_strategy = game.strategy().to_vec();
+                let ip_fold_index = ip_check_raise_actions
+                    .iter()
+                    .position(|action| matches!(action, Action::Fold));
+                let ip_call_index = ip_check_raise_actions
+                    .iter()
+                    .position(|action| matches!(action, Action::Call));
+                extract.ip_vs_check_raise_found =
+                    ip_fold_index.is_some() || ip_call_index.is_some();
+                fill_action_freqs(
+                    &mut extract.btn_vs_check_raise_fold_freq,
+                    &ip_check_raise_strategy,
+                    ip_fold_index,
+                    ip_hand_count,
+                );
+                fill_action_freqs(
+                    &mut extract.btn_vs_check_raise_call_freq,
+                    &ip_check_raise_strategy,
+                    ip_call_index,
+                    ip_hand_count,
+                );
+            }
         } else {
             println!(
                 "BB flop action export: IP branch bet {} not found after BB checks; actions={ip_actions:?}",
@@ -1724,8 +1858,8 @@ fn extract_bb_flop_actions(
         game.back_to_root();
     }
 
-    fill_donk_raise_response(game, donk33_index, "33", hand_count, &mut extract)?;
-    fill_donk_raise_response(game, donk75_index, "75", hand_count, &mut extract)?;
+    fill_donk_raise_response(game, donk33_index, "33", hand_count, ip_hand_count, &mut extract)?;
+    fill_donk_raise_response(game, donk75_index, "75", hand_count, ip_hand_count, &mut extract)?;
     game.back_to_root();
 
     println!(
@@ -1735,6 +1869,14 @@ fn extract_bb_flop_actions(
     println!(
         "BB flop action export: response after donk -> BTN raise found 33={} 75={}",
         extract.donk33_vs_raise_found, extract.donk75_vs_raise_found
+    );
+    println!(
+        "BB flop action export: BTN response vs BB donk found={}",
+        extract.ip_vs_donk_found
+    );
+    println!(
+        "BB flop action export: BTN response vs BB check-raise found={}",
+        extract.ip_vs_check_raise_found
     );
     println!(
         "BB flop action export: using each combo's primary donk line for bb_donk_then_vs_ip_raise_* columns when both donk sizes exist."
@@ -1766,6 +1908,7 @@ fn fill_donk_raise_response(
     donk_index: Option<usize>,
     donk_label: &str,
     hand_count: usize,
+    ip_hand_count: usize,
     extract: &mut BbFlopActionExtract,
 ) -> Result<(), Box<dyn Error>> {
     game.back_to_root();
@@ -1777,6 +1920,39 @@ fn fill_donk_raise_response(
     game.play(donk_index);
     let ip_response_actions = game.available_actions().to_vec();
     println!("BB flop action export: after BB donk {donk_label}, BTN actions = {ip_response_actions:?}");
+    if donk_label == extract.branch_suffix {
+        game.cache_normalized_weights();
+        let ip_response_strategy = game.strategy().to_vec();
+        let ip_fold_index = ip_response_actions
+            .iter()
+            .position(|action| matches!(action, Action::Fold));
+        let ip_call_index = ip_response_actions
+            .iter()
+            .position(|action| matches!(action, Action::Call));
+        let ip_raise_index = ip_response_actions
+            .iter()
+            .position(|action| matches!(action, Action::Raise(_)));
+        extract.ip_vs_donk_found =
+            ip_fold_index.is_some() || ip_call_index.is_some() || ip_raise_index.is_some();
+        fill_action_freqs(
+            &mut extract.btn_vs_donk_fold_freq,
+            &ip_response_strategy,
+            ip_fold_index,
+            ip_hand_count,
+        );
+        fill_action_freqs(
+            &mut extract.btn_vs_donk_call_freq,
+            &ip_response_strategy,
+            ip_call_index,
+            ip_hand_count,
+        );
+        fill_action_freqs(
+            &mut extract.btn_vs_donk_raise_freq,
+            &ip_response_strategy,
+            ip_raise_index,
+            ip_hand_count,
+        );
+    }
     let ip_raise_index = ip_response_actions
         .iter()
         .position(|action| matches!(action, Action::Raise(_)));
@@ -1856,6 +2032,7 @@ fn sizing_as_decimal(sizing: Sizing) -> f64 {
 
 fn write_bb_flop_actions_header(writer: &mut csv::Writer<std::fs::File>) -> Result<(), Box<dyn Error>> {
     writer.write_record([
+        "row_type",
         "scenario_id",
         "spot_id",
         "spot_name",
@@ -1877,6 +2054,15 @@ fn write_bb_flop_actions_header(writer: &mut csv::Writer<std::fs::File>) -> Resu
         "bb_primary_original_action",
         "bb_primary_vs_ip_bet_response",
         "bb_primary_donk_vs_raise_response",
+        "btn_hand",
+        "btn_combo",
+        "btn_vs_bb_donk_fold_freq",
+        "btn_vs_bb_donk_call_freq",
+        "btn_vs_bb_donk_raise_freq",
+        "btn_vs_bb_check_raise_fold_freq",
+        "btn_vs_bb_check_raise_call_freq",
+        "btn_primary_vs_bb_donk_response",
+        "btn_primary_vs_bb_check_raise_response",
         "source_node_status",
     ])?;
     Ok(())
@@ -1887,8 +2073,12 @@ fn export_bb_flop_actions_rows(
     scenario_id: u32,
     scenario: &DebugScenario,
     extract: &BbFlopActionExtract,
-) -> Result<usize, Box<dyn Error>> {
-    let mut rows = 0usize;
+) -> Result<ActionExportCounts, Box<dyn Error>> {
+    let mut counts = ActionExportCounts {
+        total_rows: 0,
+        bb_rows: 0,
+        btn_rows: 0,
+    };
     for hand in &extract.hands {
         let i = hand.index;
         let (donk_raise_fold, donk_raise_call, primary_donk_status) = primary_donk_raise_response(extract, i);
@@ -1902,20 +2092,21 @@ fn export_bb_flop_actions_rows(
         );
         let primary_vs_ip_bet = classify_primary(
             &[
-                ("CHECK_FOLD", extract.vs_bet_fold_freq[i]),
                 ("CHECK_CALL", extract.vs_bet_call_freq[i]),
+                ("CHECK_FOLD", extract.vs_bet_fold_freq[i]),
                 ("CHECK_RAISE", extract.vs_bet_raise_freq[i]),
             ],
             "UNAVAILABLE",
         );
         let primary_donk_vs_raise = classify_primary(
             &[
-                ("DONK_FOLD_VS_RAISE", donk_raise_fold),
                 ("DONK_CALL_VS_RAISE", donk_raise_call),
+                ("DONK_FOLD_VS_RAISE", donk_raise_fold),
             ],
             "UNAVAILABLE",
         );
         writer.write_record([
+            "BB_HAND_ACTIONS".to_string(),
             scenario_id.to_string(),
             scenario.spot_id.to_string(),
             debug_spot_name(scenario, extract.branch_suffix),
@@ -1937,15 +2128,80 @@ fn export_bb_flop_actions_rows(
             primary_original,
             primary_vs_ip_bet,
             primary_donk_vs_raise,
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
             source_node_status(extract, &primary_donk_status),
         ])?;
-        rows += 1;
+        counts.total_rows += 1;
+        counts.bb_rows += 1;
+    }
+
+    for hand in &extract.ip_hands {
+        let i = hand.index;
+        let primary_vs_donk = classify_primary(
+            &[
+                ("CALL_VS_DONK", extract.btn_vs_donk_call_freq[i]),
+                ("FOLD_VS_DONK", extract.btn_vs_donk_fold_freq[i]),
+                ("RAISE_VS_DONK", extract.btn_vs_donk_raise_freq[i]),
+            ],
+            "UNAVAILABLE",
+        );
+        let primary_vs_check_raise = classify_primary(
+            &[
+                ("CALL_VS_CHECK_RAISE", extract.btn_vs_check_raise_call_freq[i]),
+                ("FOLD_VS_CHECK_RAISE", extract.btn_vs_check_raise_fold_freq[i]),
+            ],
+            "UNAVAILABLE",
+        );
+        writer.write_record([
+            "BTN_HAND_ACTIONS".to_string(),
+            scenario_id.to_string(),
+            scenario.spot_id.to_string(),
+            debug_spot_name(scenario, extract.branch_suffix),
+            scenario.board.to_string(),
+            scenario.full_board.to_string(),
+            scenario.villain_position.to_string(),
+            scenario.hero_position.to_string(),
+            extract.branch_size.to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            hand_class_label(hand.cards),
+            hand.label.clone(),
+            format_optional_freq(extract.btn_vs_donk_fold_freq[i]),
+            format_optional_freq(extract.btn_vs_donk_call_freq[i]),
+            format_optional_freq(extract.btn_vs_donk_raise_freq[i]),
+            format_optional_freq(extract.btn_vs_check_raise_fold_freq[i]),
+            format_optional_freq(extract.btn_vs_check_raise_call_freq[i]),
+            primary_vs_donk,
+            primary_vs_check_raise,
+            btn_source_node_status(extract),
+        ])?;
+        counts.total_rows += 1;
+        counts.btn_rows += 1;
     }
     println!(
-        "BB flop action export: branch {} exported {} BB range hands/combos",
-        extract.branch_size, rows
+        "BB flop action export: branch {} exported {} BB rows and {} BTN rows",
+        extract.branch_size, counts.bb_rows, counts.btn_rows
     );
-    Ok(rows)
+    Ok(counts)
 }
 
 fn debug_spot_name(scenario: &DebugScenario, suffix: &str) -> String {
@@ -1967,7 +2223,7 @@ fn primary_donk_raise_response(
     if donk33 < 0.0 && donk75 < 0.0 {
         return (None, None, "DONK_NODE_MISSING".to_string());
     }
-    if donk75 > donk33 + PRIMARY_ACTION_EPS {
+    if donk75 > donk33 {
         (
             extract.donk75_vs_raise_fold_freq[hand_index],
             extract.donk75_vs_raise_call_freq[hand_index],
@@ -1993,28 +2249,14 @@ fn primary_donk_raise_response(
 }
 
 fn classify_primary(options: &[(&str, Option<f32>)], unavailable: &str) -> String {
-    let values = options
+    options
         .iter()
         .filter_map(|(label, value)| value.map(|value| (*label, value)))
-        .collect::<Vec<_>>();
-    if values.is_empty() {
-        return unavailable.to_string();
-    }
-    let max = values
-        .iter()
-        .map(|(_, value)| *value)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let close_count = values
-        .iter()
-        .filter(|(_, value)| (max - *value).abs() <= PRIMARY_ACTION_EPS)
-        .count();
-    if close_count != 1 {
-        return "MIXED".to_string();
-    }
-    values
-        .iter()
-        .find(|(_, value)| (max - *value).abs() <= PRIMARY_ACTION_EPS)
-        .map(|(label, _)| (*label).to_string())
+        .fold(None, |best: Option<(&str, f32)>, current| match best {
+            Some((_, best_value)) if current.1 <= best_value => best,
+            _ => Some(current),
+        })
+        .map(|(label, _)| label.to_string())
         .unwrap_or_else(|| unavailable.to_string())
 }
 
@@ -2039,10 +2281,31 @@ fn source_node_status(extract: &BbFlopActionExtract, primary_donk_status: &str) 
     parts.join("_")
 }
 
+fn btn_source_node_status(extract: &BbFlopActionExtract) -> String {
+    if !extract.root_found {
+        return "UNAVAILABLE".to_string();
+    }
+    let mut parts = Vec::new();
+    parts.push("ROOT_FOUND");
+    parts.push(if extract.ip_vs_donk_found {
+        "BTN_VS_DONK_FOUND"
+    } else {
+        "BTN_VS_DONK_MISSING"
+    });
+    parts.push(if extract.ip_vs_check_raise_found {
+        "BTN_VS_CHECK_RAISE_FOUND"
+    } else {
+        "BTN_VS_CHECK_RAISE_MISSING"
+    });
+    parts.join("_")
+}
+
 fn print_bb_action_summaries(extract: &BbFlopActionExtract) {
     let mut original_counts = std::collections::BTreeMap::<String, usize>::new();
     let mut vs_bet_counts = std::collections::BTreeMap::<String, usize>::new();
     let mut donk_raise_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut btn_vs_donk_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut btn_vs_check_raise_counts = std::collections::BTreeMap::<String, usize>::new();
     for hand in &extract.hands {
         let i = hand.index;
         *original_counts
@@ -2058,8 +2321,8 @@ fn print_bb_action_summaries(extract: &BbFlopActionExtract) {
         *vs_bet_counts
             .entry(classify_primary(
                 &[
-                    ("CHECK_FOLD", extract.vs_bet_fold_freq[i]),
                     ("CHECK_CALL", extract.vs_bet_call_freq[i]),
+                    ("CHECK_FOLD", extract.vs_bet_fold_freq[i]),
                     ("CHECK_RAISE", extract.vs_bet_raise_freq[i]),
                 ],
                 "UNAVAILABLE",
@@ -2068,7 +2331,29 @@ fn print_bb_action_summaries(extract: &BbFlopActionExtract) {
         let (fold, call, _) = primary_donk_raise_response(extract, i);
         *donk_raise_counts
             .entry(classify_primary(
-                &[("DONK_FOLD_VS_RAISE", fold), ("DONK_CALL_VS_RAISE", call)],
+                &[("DONK_CALL_VS_RAISE", call), ("DONK_FOLD_VS_RAISE", fold)],
+                "UNAVAILABLE",
+            ))
+            .or_insert(0) += 1;
+    }
+    for hand in &extract.ip_hands {
+        let i = hand.index;
+        *btn_vs_donk_counts
+            .entry(classify_primary(
+                &[
+                    ("CALL_VS_DONK", extract.btn_vs_donk_call_freq[i]),
+                    ("FOLD_VS_DONK", extract.btn_vs_donk_fold_freq[i]),
+                    ("RAISE_VS_DONK", extract.btn_vs_donk_raise_freq[i]),
+                ],
+                "UNAVAILABLE",
+            ))
+            .or_insert(0) += 1;
+        *btn_vs_check_raise_counts
+            .entry(classify_primary(
+                &[
+                    ("CALL_VS_CHECK_RAISE", extract.btn_vs_check_raise_call_freq[i]),
+                    ("FOLD_VS_CHECK_RAISE", extract.btn_vs_check_raise_fold_freq[i]),
+                ],
                 "UNAVAILABLE",
             ))
             .or_insert(0) += 1;
@@ -2076,6 +2361,8 @@ fn print_bb_action_summaries(extract: &BbFlopActionExtract) {
     println!("BB primary original action counts: {original_counts:?}");
     println!("BB primary vs IP bet response counts: {vs_bet_counts:?}");
     println!("BB primary donk-vs-raise response counts: {donk_raise_counts:?}");
+    println!("BTN primary vs BB donk response counts: {btn_vs_donk_counts:?}");
+    println!("BTN primary vs BB check-raise response counts: {btn_vs_check_raise_counts:?}");
 }
 
 fn format_optional_freq(value: Option<f32>) -> String {
